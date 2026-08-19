@@ -449,9 +449,12 @@ func (m model) pageSize() int {
 	return 5
 }
 
+// headerLines is the dashboard header height in rows.
+const headerLines = 2
+
 // paneContentHeight is the inner height of a normal (non-zoomed) pane.
 func (m model) paneContentHeight() int {
-	h := (m.height-2)/2 - 2
+	h := (m.height-headerLines-1)/2 - 2
 	if h < 1 {
 		return 1
 	}
@@ -801,7 +804,7 @@ func (m model) render() string {
 	var body string
 	switch {
 	case m.zoomed:
-		body = m.renderPane(m.focused, 0, m.width, m.height-2, view.Compact)
+		body = m.renderPane(m.focused, headerLines, m.width, m.height-headerLines-1, view.Compact)
 	case stack:
 		body = m.renderStack(view)
 	default:
@@ -829,35 +832,38 @@ func (m model) renderHeader() string {
 			}
 		}
 	}
+	g := m.glyphs()
 	dot := func(c theme.Role, s string) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[c])).Render(s)
 	}
-	g := m.glyphs()
 	dots := dot(theme.OK, fmt.Sprintf("%s%d", g.ok, ok)) + " " +
 		dot(theme.Warn, fmt.Sprintf("%s%d", g.account, account)) + " " +
 		dot(theme.Err, fmt.Sprintf("%s%d", g.down, down))
 	preset := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
 		Render("[p]reset: ") + m.activeViewDef().Name
+	checkBtn := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
+		Render("[c]heck all")
 	clock := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
 		Render(time.Now().Format("15:04"))
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true).
-		Render("sslug")
-	// Check button region.
-	checkBtn := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).Render("[c]heck all")
-	line := " " + title + "  " + dots + "   " + preset + "   " + checkBtn + strings.Repeat(" ", 2)
-	// Right-align clock.
-	pad := m.width - lipgloss.Width(line) - lipgloss.Width(clock)
+
+	// Brand art (gradient sweep) on the left; live summary beside it.
+	art := theme.Art(m.palette)
+	artW := lipgloss.Width(theme.ArtLines[0]) + 8
+	info := " " + dots + "   " + preset + "   " + checkBtn
+	pad := m.width - artW - lipgloss.Width(info) - lipgloss.Width(clock)
 	if pad < 1 {
 		pad = 1
 	}
-	line += strings.Repeat(" ", pad) + clock
-	// Register header hit regions.
-	btnX := 1 + lipgloss.Width("sslug") + 2 + lipgloss.Width(fmt.Sprintf("●%d ◐%d ○%d", ok, account, down)) + 3 + lipgloss.Width("[p]reset: "+m.activeViewDef().Name) + 3
+	line1 := info + strings.Repeat(" ", pad) + clock
+	joined := lipgloss.JoinHorizontal(lipgloss.Top, art, line1)
+
+	// Header hit regions (two-line header).
+	btnX := artW + 1 + lipgloss.Width(fmt.Sprintf("%s%d %s%d %s%d", g.ok, ok, g.account, account, g.down, down)) + 3 + lipgloss.Width("[p]reset: "+m.activeViewDef().Name) + 3
 	m.regions = append(m.regions,
-		hitRegion{kind: "cycle-view", x: btnX - lipgloss.Width("[p]reset: "+m.activeViewDef().Name) - 3, y: 0, w: lipgloss.Width("[p]reset: " + m.activeViewDef().Name), h: 1},
+		hitRegion{kind: "cycle-view", x: artW + 1 + lipgloss.Width(fmt.Sprintf("%s%d %s%d %s%d", g.ok, ok, g.account, account, g.down, down)) + 3, y: 0, w: lipgloss.Width("[p]reset: " + m.activeViewDef().Name), h: 1},
 		hitRegion{kind: "check-button", x: btnX, y: 0, w: lipgloss.Width("[c]heck all"), h: 1},
 	)
-	return line
+	return joined
 }
 
 // dashKeyMap backs the adaptive footer hints.
@@ -894,13 +900,13 @@ func (m model) renderFooter() string {
 // renderStack renders panels vertically in view order.
 func (m model) renderStack(view config.View) string {
 	panels := m.visiblePanels()
-	avail := m.height - 2
+	avail := m.height - headerLines - 1
 	if avail < len(panels)*3 {
 		avail = len(panels) * 3
 	}
 	per := avail / len(panels)
 	var parts []string
-	y := 1 // after header
+	y := headerLines
 	for i, p := range panels {
 		h := per
 		if i == len(panels)-1 {
@@ -938,7 +944,7 @@ func (m model) renderGrid(view config.View) string {
 	}
 	leftW := int(float64(m.width) * split)
 	rightW := m.width - leftW
-	avail := m.height - 2
+	avail := m.height - headerLines - 1
 
 	renderCol := func(panels []panelID, w, y0 int) string {
 		if len(panels) == 0 {
@@ -958,13 +964,13 @@ func (m model) renderGrid(view config.View) string {
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
 
-	l := renderCol(left, leftW, 1)
-	r := renderCol(right, rightW, 1)
+	l := renderCol(left, leftW, headerLines)
+	r := renderCol(right, rightW, headerLines)
 	if r == "" {
 		return l
 	}
 	// Register the left/right split for mouse: left column spans [0,leftW).
-	m.regions = append(m.regions, hitRegion{kind: "column-split", panel: -1, x: leftW, y: 1, w: 0, h: avail})
+	m.regions = append(m.regions, hitRegion{kind: "column-split", panel: -1, x: leftW, y: headerLines, w: 0, h: avail})
 	return lipgloss.JoinHorizontal(lipgloss.Top, l, r)
 }
 

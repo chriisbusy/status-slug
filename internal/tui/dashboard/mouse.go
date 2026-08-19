@@ -157,20 +157,20 @@ func (m model) menuClick(x, y int) (tea.Model, tea.Cmd) {
 // panelAt maps screen coordinates to a pane + local content row + pane origin x.
 // Row -1 means the pane's top border (heading); row 0 is the first content row.
 func (m model) panelAt(x, y int) (panelID, int, int, bool) {
-	if y < 1 || y >= m.height-1 {
-		return 0, 0, 0, false // header/footer
+	if y < 2 || y >= m.height-1 {
+		return 0, 0, 0, false // header (2 lines) / footer
 	}
 	view := m.activeViewDef()
 	stack := m.width < 100 || m.height < 24 || view.Arrangement == "stack" || m.zoomed
 
 	if m.zoomed {
-		return m.focused, y - 2, 0, true
+		return m.focused, y - 3, 0, true
 	}
 	if stack {
 		panels := m.visiblePanels()
-		avail := m.height - 2
+		avail := m.height - 3
 		per := avail / len(panels)
-		rel := y - 1
+		rel := y - 2
 		idx := rel / per
 		if idx >= len(panels) {
 			idx = len(panels) - 1
@@ -209,9 +209,9 @@ func (m model) panelAt(x, y int) (panelID, int, int, bool) {
 		col = right
 		paneX = leftW
 	}
-	avail := m.height - 2
+	avail := m.height - 3
 	per := avail / len(col)
-	rel := y - 1
+	rel := y - 2
 	idx := rel / per
 	if idx >= len(col) {
 		idx = len(col) - 1
