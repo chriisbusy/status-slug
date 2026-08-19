@@ -111,6 +111,21 @@ func resolveKey(p config.Provider) string {
 }
 
 func runDashboard(_ []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fatal("load config", err)
+	}
+	// First run (or empty config): wizard before dashboard.
+	if len(cfg.Providers) == 0 {
+		cfg, err = wizard.Run(cfg, "")
+		if err != nil {
+			fatal("setup", err)
+		}
+		if len(cfg.Providers) == 0 {
+			// User aborted wizard without adding anything.
+			return
+		}
+	}
 	if err := dashboard.Run(); err != nil {
 		fatal("dashboard", err)
 	}
