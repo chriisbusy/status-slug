@@ -61,29 +61,32 @@ type Warning struct {
 }
 
 // Builtins.
-// sstop is the default: btop-evoking — near-black background, cyan→magenta
-// gradient chrome, vivid ok/warn/err, and a muted role that stays readable.
+// sstop is the default: a 16-color ANSI theme mirroring btop's TTY theme.
+// Values are ANSI palette indices ("0"–"15"), so sslug draws from the
+// terminal's OWN palette exactly like btop does — the two always match,
+// whatever the terminal's theme. Bright black ("8") is the dim gray btop
+// uses for borders/inactive text; bright white for titles.
 var builtinSstop = Palette{
-	Bg:             "#0B0E14",
-	Fg:             "#E5EDF5",
-	Muted:          "#8B98A9",
-	Title:          "#F2F6FA",
-	Accent:         "#00D4FF",
-	BoxBorder:      "#2E3A4A",
-	BoxBorderFocus: "#00D4FF",
-	OK:             "#00FF87",
-	Warn:           "#FFBF40",
-	Err:            "#FF4D5E",
-	Unknown:        "#8B98A9",
-	BarFill:        "#00D4FF",
-	BarEmpty:       "#26303E",
-	SparkLo:        "#26303E",
-	SparkHi:        "#00FF87",
-	GradLo:         "#00D4FF",
-	GradHi:         "#FF5ED2",
-	SelectedBg:     "#1B2735",
-	SelectedFg:     "#F2F6FA",
-	KeyHint:        "#8B98A9",
+	Bg:             "",   // terminal default, like btop TTY main_bg=-1
+	Fg:             "7",  // white
+	Muted:          "8",  // bright black — btop's dim gray
+	Title:          "15", // bright white
+	Accent:         "14", // bright cyan
+	BoxBorder:      "8",
+	BoxBorderFocus: "14",
+	OK:             "10", // bright green
+	Warn:           "11", // bright yellow
+	Err:            "9",  // bright red
+	Unknown:        "8",
+	BarFill:        "14",
+	BarEmpty:       "8",
+	SparkLo:        "8",
+	SparkHi:        "10",
+	GradLo:         "14",
+	GradHi:         "13", // bright magenta
+	SelectedBg:     "8",
+	SelectedFg:     "15",
+	KeyHint:        "8",
 }
 
 // mocha is the former default — Catppuccin-mocha-inspired, softer.

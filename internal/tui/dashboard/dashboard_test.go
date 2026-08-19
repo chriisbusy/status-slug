@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/chriisbusy/status-slug/internal/config"
 	"github.com/chriisbusy/status-slug/internal/state"
@@ -426,5 +427,27 @@ func TestViewPanelsOmission(t *testing.T) {
 	}
 	if strings.Contains(frame, "[s]tatus") {
 		t.Error("stats-only view must omit status pane")
+	}
+}
+
+// TestFrameWidthInvariant: no rendered line may exceed the terminal width —
+// over-width lines wrap and shift every corner (the "corners off" defect).
+func TestFrameWidthInvariant(t *testing.T) {
+	for _, w := range []int{60, 80, 100, 120, 160} {
+		m := newTestModel()
+		m.width, m.height = w, 40
+		for _, l := range strings.Split(m.render(), "\n") {
+			if got := lipgloss.Width(l); got > w {
+				t.Errorf("width %d: line is %d cells wide: %.40q", w, got, l)
+			}
+		}
+	}
+	// And with the wizard popup open (first-run path).
+	m := New(config.Default(), state.New())
+	m.width, m.height = 100, 40
+	for _, l := range strings.Split(m.render(), "\n") {
+		if got := lipgloss.Width(l); got > 100 {
+			t.Errorf("popup: line is %d cells wide: %.40q", got, l)
+		}
 	}
 }

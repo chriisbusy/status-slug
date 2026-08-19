@@ -97,6 +97,10 @@ type model struct {
 
 	// lastCheck for auto-refresh bookkeeping.
 	lastCheck time.Time
+
+	// Resize debounce state.
+	resizeSeq          int
+	pendingW, pendingH int
 }
 
 // hitRegion is a clickable rectangle.
@@ -261,6 +265,11 @@ func (m *model) savePrefs() {
 // Init implements tea.Model.
 func (m model) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if m.wiz != nil {
+		// Wizard opened at construction (first run): start its form
+		// lifecycle (cursor blink, field focus) too.
+		cmds = append(cmds, m.wiz.Init())
+	}
 	if m.cfg.Settings.CheckOnLaunch {
 		cmds = append(cmds, func() tea.Msg { return checkNowMsg{} })
 	}
@@ -275,13 +284,39 @@ func (m model) tickCmd() tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+// resizeApplyMsg fires after a resize debounce window; the latest seq wins.
+type resizeApplyMsg struct{ seq int }
+
+// resizeDebounce coalesces pane-resize drag storms into one reflow.
+const resizeDebounce = 80 * time.Millisecond
+
 // Update implements tea.Model.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Wizard popup is modal: it gets every message first.
-	if m.wiz != nil {
-		if ws, ok := msg.(tea.WindowSizeMsg); ok {
-			m.width, m.height = ws.Width, ws.Height
+	// Resize: debounce — repaint once after the drag settles, not on every
+	// intermediate size (the flicker the operator reported).
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		m.pendingW, m.pendingH = ws.Width, ws.Height
+		m.resizeSeq++
+		seq := m.resizeSeq
+		return m, tea.Tick(resizeDebounce, func(time.Time) tea.Msg {
+			return resizeApplyMsg{seq}
+		})
+	}
+	if ra, ok := msg.(resizeApplyMsg); ok {
+		if ra.seq != m.resizeSeq {
+			return m, nil // a newer size already superseded this one
 		}
+		m.width, m.height = m.pendingW, m.pendingH
+		if m.wiz != nil {
+			wm, cmd := m.wiz.UpdateModel(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+			m.wiz = &wm
+			return m, cmd
+		}
+		return m, nil
+	}
+
+	// Wizard popup is modal: it gets every other message first.
+	if m.wiz != nil {
 		wm, cmd := m.wiz.UpdateModel(msg)
 		m.wiz = &wm
 		if wm.IsDone() || wm.IsAborted() {
@@ -292,10 +327,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		return m, nil
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -1023,14 +1054,33 @@ func (m model) renderHeader() string {
 
 	// Brand art (gradient sweep) on the left; live summary beside it.
 	art := theme.Art(m.palette)
-	artW := lipgloss.Width(theme.ArtLines[0]) + 8
-	info := " " + dots + "   " + preset + "   " + checkBtn
-	pad := m.width - artW - lipgloss.Width(info) - lipgloss.Width(clock)
-	if pad < 1 {
-		pad = 1
+	artW := 0
+	for _, l := range strings.Split(art, "\n") {
+		if w := ansi.StringWidth(l); w > artW {
+			artW = w
+		}
 	}
-	line1 := info + strings.Repeat(" ", pad) + clock
+	artW += 2 // breathing room before the summary
+
+	// At narrow widths drop the clock first, then let the summary truncate.
+	info := " " + dots + "   " + preset + "   " + checkBtn
+	clockStr := clock
+	if artW+ansi.StringWidth(info)+ansi.StringWidth(clockStr) > m.width {
+		clockStr = ""
+	}
+	pad := m.width - artW - ansi.StringWidth(info) - ansi.StringWidth(clockStr)
+	if pad < 0 {
+		pad = 0
+	}
+	line1 := info + strings.Repeat(" ", pad) + clockStr
 	joined := lipgloss.JoinHorizontal(lipgloss.Top, art, line1)
+	// Hard clamp: the header must never be wider than the terminal —
+	// JoinVertical pads every line in the frame to the widest one.
+	var out []string
+	for _, l := range strings.Split(joined, "\n") {
+		out = append(out, truncate(l, m.width))
+	}
+	joined = strings.Join(out, "\n")
 
 	// Header hit regions (two-line header).
 	btnX := artW + 1 + lipgloss.Width(fmt.Sprintf("%s%d %s%d %s%d", g.ok, ok, g.account, account, g.down, down)) + 3 + lipgloss.Width("[p]reset: "+m.activeViewDef().Name) + 3

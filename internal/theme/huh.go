@@ -19,7 +19,6 @@ func HuhTheme(p Palette) huh.Theme {
 	border := lipgloss.Color(p[BoxBorder])
 	selBg := lipgloss.Color(p[SelectedBg])
 	selFg := lipgloss.Color(p[SelectedFg])
-	titleC := lipgloss.Color(p[Title])
 	keyHint := lipgloss.Color(p[KeyHint])
 
 	base.Form.Base = base.Form.Base.Foreground(fg)
@@ -29,13 +28,24 @@ func HuhTheme(p Palette) huh.Theme {
 	base.FieldSeparator = base.FieldSeparator.Foreground(border)
 
 	style := func(fs *huh.FieldStyles, focused bool) {
-		fs.Base = fs.Base.Foreground(fg)
-		fs.Title = fs.Title.Foreground(accent).Bold(true)
+		if focused {
+			fs.Base = fs.Base.Foreground(fg)
+			fs.Title = fs.Title.Foreground(accent).Bold(true)
+		} else {
+			// Blurred fields stay quiet: muted title, no accent, so exactly
+			// one field reads as active.
+			fs.Base = fs.Base.Foreground(muted)
+			fs.Title = fs.Title.Foreground(muted).Bold(false)
+		}
 		fs.Description = fs.Description.Foreground(muted)
 		fs.ErrorIndicator = fs.ErrorIndicator.Foreground(errC)
 		fs.ErrorMessage = fs.ErrorMessage.Foreground(muted)
 		fs.SelectSelector = fs.SelectSelector.Foreground(accent)
-		fs.Option = fs.Option.Foreground(fg)
+		if focused {
+			fs.Option = fs.Option.Foreground(fg)
+		} else {
+			fs.Option = fs.Option.Foreground(muted)
+		}
 		fs.NextIndicator = fs.NextIndicator.Foreground(muted)
 		fs.PrevIndicator = fs.PrevIndicator.Foreground(muted)
 		fs.Directory = fs.Directory.Foreground(accent)
@@ -46,11 +56,16 @@ func HuhTheme(p Palette) huh.Theme {
 		fs.UnselectedOption = fs.UnselectedOption.Foreground(muted)
 		fs.UnselectedPrefix = fs.UnselectedPrefix.Foreground(muted)
 		fs.TextInput.Prompt = fs.TextInput.Prompt.Foreground(accent)
-		fs.TextInput.Text = fs.TextInput.Text.Foreground(fg)
+		if focused {
+			fs.TextInput.Text = fs.TextInput.Text.Foreground(fg)
+			fs.TextInput.CursorText = fs.TextInput.CursorText.Foreground(fg)
+		} else {
+			fs.TextInput.Text = fs.TextInput.Text.Foreground(muted)
+			fs.TextInput.CursorText = fs.TextInput.CursorText.Foreground(muted)
+		}
 		fs.TextInput.Placeholder = fs.TextInput.Placeholder.Foreground(muted)
 		// Block cursor: accent surface, readable glyph on it.
 		fs.TextInput.Cursor = fs.TextInput.Cursor.Background(accent).Foreground(selFg)
-		fs.TextInput.CursorText = fs.TextInput.CursorText.Foreground(fg)
 		fs.Card = fs.Card.BorderForeground(border)
 		fs.NoteTitle = fs.NoteTitle.Foreground(accent).Bold(true)
 		fs.Next = fs.Next.Foreground(accent)
@@ -64,8 +79,6 @@ func HuhTheme(p Palette) huh.Theme {
 	}
 	style(&base.Focused, true)
 	style(&base.Blurred, false)
-	base.Blurred.Title = base.Blurred.Title.Foreground(titleC).Bold(false)
-	base.Blurred.Description = base.Blurred.Description.Foreground(muted)
 
 	base.Help.ShortKey = base.Help.ShortKey.Foreground(keyHint)
 	base.Help.ShortDesc = base.Help.ShortDesc.Foreground(muted)
