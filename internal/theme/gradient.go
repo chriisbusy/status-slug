@@ -69,20 +69,15 @@ func GradientText(text, lo, hi string) string {
 	return strings.Join(lines, "\n")
 }
 
-// ArtLines are the status-slug mark, drawn with a gradient sweep.
+// ArtLines are the sslug mark — SSLUG in a two-row block font,
+// drawn with a gradient sweep.
 var ArtLines = []string{
-	"█▀ ▀█▀ ▄▀▄ ▀█▀ █ █ █▀",
-	"▄█  █  █▀█  █  █▄█ ▄█",
+	"█▀▀ █▀▀ █   █ █ ▄▀▀",
+	"▄▄█ ▄▄█ █▄▄ █▄█ █▄█",
 }
 
-// Art renders the brand art with the palette gradient, plus the wordmark.
+// Art renders the brand art with the palette gradient.
 func Art(p Palette) string {
 	body := strings.Join(ArtLines, "\n")
-	painted := GradientText(body, p[GradLo], p[GradHi])
-	word := lipgloss.NewStyle().Foreground(lipgloss.Color(p[Muted])).Render(" · sslug")
-	lines := strings.Split(painted, "\n")
-	if len(lines) > 1 {
-		lines[1] += word
-	}
-	return strings.Join(lines, "\n")
+	return GradientText(body, p[GradLo], p[GradHi])
 }

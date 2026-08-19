@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/term"
+
 	"github.com/chriisbusy/status-slug/internal/config"
 )
 
@@ -58,10 +61,36 @@ type Warning struct {
 }
 
 // Builtins.
+// sstop is the default: btop-evoking — near-black background, cyan→magenta
+// gradient chrome, vivid ok/warn/err, and a muted role that stays readable.
 var builtinSstop = Palette{
+	Bg:             "#0B0E14",
+	Fg:             "#E5EDF5",
+	Muted:          "#8B98A9",
+	Title:          "#F2F6FA",
+	Accent:         "#00D4FF",
+	BoxBorder:      "#2E3A4A",
+	BoxBorderFocus: "#00D4FF",
+	OK:             "#00FF87",
+	Warn:           "#FFBF40",
+	Err:            "#FF4D5E",
+	Unknown:        "#8B98A9",
+	BarFill:        "#00D4FF",
+	BarEmpty:       "#26303E",
+	SparkLo:        "#26303E",
+	SparkHi:        "#00FF87",
+	GradLo:         "#00D4FF",
+	GradHi:         "#FF5ED2",
+	SelectedBg:     "#1B2735",
+	SelectedFg:     "#F2F6FA",
+	KeyHint:        "#8B98A9",
+}
+
+// mocha is the former default — Catppuccin-mocha-inspired, softer.
+var builtinMocha = Palette{
 	Bg:             "#1E1E2E",
 	Fg:             "#CDD6F4",
-	Muted:          "#6C7086",
+	Muted:          "#8B9BC0",
 	Title:          "#CDD6F4",
 	Accent:         "#00C2FF",
 	BoxBorder:      "#3B4250",
@@ -69,7 +98,7 @@ var builtinSstop = Palette{
 	OK:             "#00FF87",
 	Warn:           "#FFD75F",
 	Err:            "#FF5F5F",
-	Unknown:        "#6C7086",
+	Unknown:        "#8B9BC0",
 	BarFill:        "#00C2FF",
 	BarEmpty:       "#3B4250",
 	SparkLo:        "#3B4250",
@@ -78,7 +107,7 @@ var builtinSstop = Palette{
 	GradHi:         "#FF79C6",
 	SelectedBg:     "#313244",
 	SelectedFg:     "#CDD6F4",
-	KeyHint:        "#6C7086",
+	KeyHint:        "#8B9BC0",
 }
 
 var builtinNord = Palette{
@@ -131,12 +160,13 @@ var builtinMono = Palette{
 
 var builtins = map[string]Palette{
 	"sstop": builtinSstop,
+	"mocha": builtinMocha,
 	"nord":  builtinNord,
 	"mono":  builtinMono,
 }
 
 // BuiltinNames returns the sorted builtin theme names.
-func BuiltinNames() []string { return []string{"sstop", "nord", "mono"} }
+func BuiltinNames() []string { return []string{"sstop", "mocha", "nord", "mono"} }
 
 // Load resolves a theme name to a palette.
 // name may be a builtin or the stem of a file in themesDir.
@@ -250,16 +280,43 @@ func NO_COLOR() bool {
 	return term == "dumb" || term == ""
 }
 
-// LoadFromSettings loads the theme named in settings, respecting NO_COLOR.
+// LoadFromSettings loads the theme named in settings, respecting NO_COLOR,
+// the terminal's background (light terminals get terminal-native mono so
+// nothing renders invisible), and theme_background (bg role emptied when
+// false → terminal's own background shows through, btop-style).
 func LoadFromSettings(s config.Settings) (Palette, []Warning) {
+	return LoadForTerminal(s, termIsDark())
+}
+
+// LoadForTerminal is LoadFromSettings with an injectable darkness flag for tests.
+func LoadForTerminal(s config.Settings, dark bool) (Palette, []Warning) {
 	if NO_COLOR() {
 		return clonePalette(builtinMono), nil
+	}
+	if !dark {
+		// Light terminal: dark-scheme colors are unreadable there; fall back
+		// to terminal-native mono rather than render invisible text.
+		p := clonePalette(builtinMono)
+		return p, []Warning{{Message: "light terminal detected — using terminal-native colors"}}
 	}
 	name := s.Theme
 	if name == "" {
 		name = "sstop"
 	}
-	return Load(name, config.ThemesDir())
+	p, warns := Load(name, config.ThemesDir())
+	if !s.ThemeBackground {
+		p[Bg] = "" // terminal-native background
+	}
+	return p, warns
+}
+
+// termIsDark reports whether the terminal has a dark background.
+// Non-TTY (tests, pipes) assumes dark — the common case.
+func termIsDark() bool {
+	if !term.IsTerminal(os.Stdout.Fd()) {
+		return true
+	}
+	return lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
 }
 
 func clonePalette(p Palette) Palette {

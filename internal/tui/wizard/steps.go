@@ -48,7 +48,7 @@ func statusColor(pal theme.Palette, status string) string {
 
 // --- step: key ---
 
-func (m *model) enterKey() (tea.Model, tea.Cmd) {
+func (m *Model) enterKey() (tea.Model, tea.Cmd) {
 	d := &m.data
 	m.step = stepKey
 
@@ -177,7 +177,7 @@ func (m *model) enterKey() (tea.Model, tea.Cmd) {
 
 // --- step: validate (async probe with spinner) ---
 
-func (m *model) enterValidate() (tea.Model, tea.Cmd) {
+func (m *Model) enterValidate() (tea.Model, tea.Cmd) {
 	if m.err != nil {
 		return m, tea.Quit
 	}
@@ -200,7 +200,7 @@ func (m *model) enterValidate() (tea.Model, tea.Cmd) {
 	})
 }
 
-func (m *model) afterValidate() (tea.Model, tea.Cmd) {
+func (m *Model) afterValidate() (tea.Model, tea.Cmd) {
 	d := &m.data
 	if d.validation.Status == check.OK {
 		m.gotoStep = stepModels
@@ -241,7 +241,7 @@ func (m *model) afterValidate() (tea.Model, tea.Cmd) {
 
 // --- step: models (async fetch → multiselect) ---
 
-func (m *model) enterModelsFetch() (tea.Model, tea.Cmd) {
+func (m *Model) enterModelsFetch() (tea.Model, tea.Cmd) {
 	m.step = stepModels
 	d := &m.data
 	if d.baseURL == "" {
@@ -265,7 +265,7 @@ func (m *model) enterModelsFetch() (tea.Model, tea.Cmd) {
 	})
 }
 
-func (m *model) enterModelsForm() (tea.Model, tea.Cmd) {
+func (m *Model) enterModelsForm() (tea.Model, tea.Cmd) {
 	d := &m.data
 	m.step = stepModels
 
@@ -336,7 +336,7 @@ func (m *model) enterModelsForm() (tea.Model, tea.Cmd) {
 
 // --- step: meters ---
 
-func (m *model) enterMeters() (tea.Model, tea.Cmd) {
+func (m *Model) enterMeters() (tea.Model, tea.Cmd) {
 	m.step = stepMeters
 	var add bool
 	var attachCredits bool
@@ -382,7 +382,7 @@ func (m *model) enterMeters() (tea.Model, tea.Cmd) {
 }
 
 // enterMeterForm runs one meter definition; loops while the user keeps adding.
-func (m *model) enterMeterForm() (tea.Model, tea.Cmd) {
+func (m *Model) enterMeterForm() (tea.Model, tea.Cmd) {
 	var (
 		name, unit, usedStr, capStr string
 		resetKind                   = "never"
@@ -460,7 +460,7 @@ func resetArgValidator(kind *string) func(string) error {
 
 // --- step: summary ---
 
-func (m *model) enterSummary() (tea.Model, tea.Cmd) {
+func (m *Model) enterSummary() (tea.Model, tea.Cmd) {
 	m.step = stepSummary
 	d := &m.data
 
@@ -510,7 +510,7 @@ func (m *model) enterSummary() (tea.Model, tea.Cmd) {
 }
 
 // save stores the key material and upserts the provider into config.
-func (m *model) save() error {
+func (m *Model) save() error {
 	d := &m.data
 	if d.keyMaterial != "" {
 		if err := secret.Store(d.keyRef, d.keyMaterial); err != nil {
@@ -524,7 +524,7 @@ func (m *model) save() error {
 
 // --- step: add another ---
 
-func (m *model) enterAddAnother() (tea.Model, tea.Cmd) {
+func (m *Model) enterAddAnother() (tea.Model, tea.Cmd) {
 	m.step = stepAddAnother
 	var again bool
 	m.form = m.newForm(huh.NewGroup(

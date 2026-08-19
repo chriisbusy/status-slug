@@ -51,8 +51,9 @@ type wizardData struct {
 	providerCount              int // providers already in config
 }
 
-// model is the root wizard tea model.
-type model struct {
+// Model is the wizard tea model — embeddable as a dashboard popup or
+// runnable standalone via Run.
+type Model struct {
 	cfg         config.Config
 	palette     theme.Palette
 	data        wizardData
@@ -68,10 +69,10 @@ type model struct {
 	wantMeter   bool
 }
 
-// Run executes the wizard, returning the updated config.
-func Run(cfg config.Config, reconfigure string) (config.Config, error) {
+// New builds the wizard for embedding (dashboard popup) or standalone run.
+func New(cfg config.Config, reconfigure string) Model {
 	palette, _ := theme.LoadFromSettings(cfg.Settings)
-	m := model{
+	m := Model{
 		cfg:         cfg,
 		palette:     palette,
 		step:        stepIdentity,
@@ -81,24 +82,83 @@ func Run(cfg config.Config, reconfigure string) (config.Config, error) {
 	m.spin = spinner.New(spinner.WithSpinner(spinner.Line),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color(palette[theme.Accent]))))
 	m.enterIdentity()
+	m.gotoStep = stepKey
+	return m
+}
 
+// Config returns the wizard's updated config.
+func (m Model) Config() config.Config { return m.cfg }
+
+// IsDone reports the wizard saved and finished.
+func (m Model) IsDone() bool { return m.step == stepDone }
+
+// IsAborted reports the wizard was aborted or errored out.
+func (m Model) IsAborted() bool { return m.step == stepAborted || m.err != nil }
+
+// Err returns the terminal error, if any.
+func (m Model) Err() error { return m.err }
+
+// Content renders the wizard as an embeddable string (no alt screen).
+func (m Model) Content() string {
+	return m.header() + "\n" + m.body()
+}
+
+// body renders the current step's interactive region.
+func (m Model) body() string {
+	switch m.step {
+	case stepValidate:
+		if m.form != nil {
+			return m.form.View()
+		}
+		return m.spin.View() + " verifying key against " + m.data.baseURL + "…"
+	case stepModels:
+		if m.form != nil {
+			return m.form.View()
+		}
+		return m.spin.View() + " discovering models…"
+	case stepDone:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).
+			Render("saved.")
+	case stepAborted:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
+			Render("setup aborted — nothing was saved.")
+	default:
+		if m.form != nil {
+			return m.form.View()
+		}
+	}
+	return ""
+}
+
+func (m Model) Init() tea.Cmd {
+	if m.form != nil {
+		return m.form.Init()
+	}
+	return nil
+}
+
+// UpdateModel is Update with a concrete return type for embedding hosts.
+func (m Model) UpdateModel(msg tea.Msg) (Model, tea.Cmd) {
+	tm, cmd := m.Update(msg)
+	if wm, ok := tm.(Model); ok {
+		return wm, cmd
+	}
+	return m, cmd
+}
+
+// Run executes the wizard standalone, returning the updated config.
+func Run(cfg config.Config, reconfigure string) (config.Config, error) {
+	m := New(cfg, reconfigure)
 	p := tea.NewProgram(m)
 	fm, err := p.Run()
 	if err != nil {
 		return cfg, err
 	}
-	final := fm.(model)
+	final := fm.(Model)
 	if final.err != nil {
 		return final.cfg, final.err
 	}
 	return final.cfg, nil
-}
-
-func (m model) Init() tea.Cmd {
-	if m.form != nil {
-		return m.form.Init()
-	}
-	return nil
 }
 
 // --- theming ---
@@ -126,7 +186,7 @@ type themeFunc struct{ styles *huh.Styles }
 func (t themeFunc) Theme(isDark bool) *huh.Styles { return t.styles }
 
 // newForm wraps a group in a themed, width-bounded huh form.
-func (m model) newForm(groups ...*huh.Group) *huh.Form {
+func (m Model) newForm(groups ...*huh.Group) *huh.Form {
 	w := 76
 	if m.width > 0 && m.width-8 < w {
 		w = m.width - 8
@@ -142,7 +202,7 @@ func (m model) newForm(groups ...*huh.Group) *huh.Form {
 
 // --- layout ---
 
-func (m model) header() string {
+func (m Model) header() string {
 	art := theme.Art(m.palette)
 	if art == "" {
 		art = "sslug"
@@ -173,41 +233,17 @@ func (m model) header() string {
 	return art + "\n\n" + dots + "\n" + hint + "\n"
 }
 
-// View implements tea.Model.
-func (m model) View() tea.View {
-	var body string
-	switch m.step {
-	case stepValidate:
-		if m.form != nil {
-			body = m.form.View()
-		} else {
-			body = m.spin.View() + " verifying key against " + m.data.baseURL + "…"
-		}
-	case stepModels:
-		if m.form != nil {
-			body = m.form.View()
-		} else {
-			body = m.spin.View() + " discovering models…"
-		}
-	case stepDone:
-		body = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).
-			Render("saved. launch sslug for the dashboard.")
-	case stepAborted:
-		body = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
-			Render("setup aborted — nothing was saved.")
-	default:
-		if m.form != nil {
-			body = m.form.View()
-		}
-	}
-	v := tea.NewView(m.header() + "\n" + body)
+// View implements tea.Model for standalone runs.
+func (m Model) View() tea.View {
+	v := tea.NewView(m.Content())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
 // --- update ---
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -252,7 +288,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // stepCompleted advances the state machine after a huh form completes.
 // The step's pendingDone closure (set by the enter* builder) unpacks field
 // values and sets gotoStep; this dispatches to the next enter* function.
-func (m model) stepCompleted() (tea.Model, tea.Cmd) {
+func (m Model) stepCompleted() (tea.Model, tea.Cmd) {
 	if m.pendingDone != nil {
 		m.pendingDone()
 		m.pendingDone = nil
@@ -290,7 +326,7 @@ func (m model) stepCompleted() (tea.Model, tea.Cmd) {
 
 // --- step: identity ---
 
-func (m *model) enterIdentity() {
+func (m *Model) enterIdentity() {
 	d := &m.data
 	if m.reconfigure != "" {
 		if existing := m.cfg.Find(m.reconfigure); existing != nil {
@@ -391,7 +427,7 @@ func (m *model) enterIdentity() {
 
 // onFormDone registers a callback fired when the current form completes.
 // Stored on the model so stepCompleted can invoke it.
-func (m *model) onFormDone(fn func()) { m.pendingDone = fn }
+func (m *Model) onFormDone(fn func()) { m.pendingDone = fn }
 
 // --- key step is in wizard_key.go (next file) ---
 

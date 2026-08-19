@@ -22,7 +22,6 @@ import (
 	"github.com/chriisbusy/status-slug/internal/serve"
 	"github.com/chriisbusy/status-slug/internal/state"
 	"github.com/chriisbusy/status-slug/internal/tui/dashboard"
-	"github.com/chriisbusy/status-slug/internal/tui/wizard"
 )
 
 var version = "dev"
@@ -158,21 +157,7 @@ func resolveKey(p config.Provider) string {
 }
 
 func runDashboard(_ []string) {
-	cfg, err := config.Load()
-	if err != nil {
-		fatal("load config", err)
-	}
-	// First run (or empty config): wizard before dashboard.
-	if len(cfg.Providers) == 0 {
-		cfg, err = wizard.Run(cfg, "")
-		if err != nil {
-			fatal("setup", err)
-		}
-		if len(cfg.Providers) == 0 {
-			// User aborted wizard without adding anything.
-			return
-		}
-	}
+	// Dashboard handles first-run wizard popup itself (empty config).
 	if err := dashboard.Run(); err != nil {
 		fatal("dashboard", err)
 	}
@@ -184,7 +169,8 @@ func runSetup(args []string) {
 		name = args[0]
 	}
 	cfg := mustLoadConfig()
-	if _, err := wizard.Run(cfg, name); err != nil {
+	st := mustLoadState()
+	if err := dashboard.RunWizard(cfg, st, name); err != nil {
 		fatal("setup", err)
 	}
 }

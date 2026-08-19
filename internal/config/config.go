@@ -34,7 +34,10 @@ type Settings struct {
 	AlertBell     bool   `toml:"alert_bell"`
 	BorderStyle   string `toml:"border_style"`
 	GraphGlyphs   string `toml:"graph_glyphs"`
-	ServeListen   string `toml:"serve_listen,omitempty"` // saved by serve --listen
+	// ThemeBackground paints the theme's bg color over the whole terminal
+	// when true; false (default) lets the terminal's own background through.
+	ThemeBackground bool   `toml:"theme_background"`
+	ServeListen     string `toml:"serve_listen,omitempty"` // saved by serve --listen
 }
 
 // View is a named panel arrangement preset.

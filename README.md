@@ -1,8 +1,8 @@
 <div align="center">
 
 ```
-█▀ ▀█▀ ▄▀▄ ▀█▀ █ █ █▀
-▄█  █  █▀█  █  █▄█ ▄█ · sslug
+█▀▀ █▀▀ █   █ █ ▄▀▀
+▄▄█ ▄▄█ █▄▄ █▄█ █▄█
 ```
 
 # status-slug
@@ -84,8 +84,8 @@ Four panes, all configurable; presets cycle with `p`:
 | **stats** | Checks / ok% / p50 / p95 / down counts per provider and favourite |
 
 Keys: `tab` cycle focus · `j/k` scroll · `c`/`⏎` check now · `i` inspect ·
-`s/u/f/t` pane menus · `p` view presets · `S` settings · `a` add provider ·
-`z` zoom pane · `?` help · `q` quit.
+`s/u/f/t` pane menus · `p` view presets · `S` settings · `a` add provider
+(setup wizard popup) · `z` zoom pane · `?` help · `q` quit.
 
 ## Usage meters
 
@@ -148,9 +148,13 @@ limit, not a fire.
 - Keys: OS keyring by default (service `sslug`); `env:VAR` references; or an
   opt-in 0600 file on headless systems. Keys are never printed, logged, or
   written outside the secret store.
-- Themes: builtins `sstop` (default), `nord`, `mono`, plus your own
-  `~/.config/status-slug/themes/<name>.theme` files — every colour role is
-  configurable, invalid roles fall back with a warning, never a crash.
+- Themes: builtins `sstop` (default, btop-evoking), `mocha`, `nord`, `mono`,
+  plus your own `~/.config/status-slug/themes/<name>.theme` files — every
+  colour role is configurable, invalid roles fall back with a warning, never
+  a crash. `theme_background = true` paints the theme background (btop's
+  `theme_background`); the default `false` lets your terminal's own
+  background through. Light-background terminals automatically get
+  terminal-native colors so nothing renders invisible.
 
 ## FAQ
 

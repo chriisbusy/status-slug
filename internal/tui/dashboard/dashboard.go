@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chriisbusy/status-slug/internal/check"
 	"github.com/chriisbusy/status-slug/internal/config"
@@ -19,6 +20,7 @@ import (
 	"github.com/chriisbusy/status-slug/internal/secret"
 	"github.com/chriisbusy/status-slug/internal/state"
 	"github.com/chriisbusy/status-slug/internal/theme"
+	"github.com/chriisbusy/status-slug/internal/tui/wizard"
 )
 
 // panelID identifies a dashboard pane.
@@ -81,6 +83,9 @@ type model struct {
 	ovFields     map[string]*string
 	ovBoolFields map[string]*bool
 
+	// Wizard popup (modal). Non-nil while the setup wizard is open.
+	wiz *wizard.Model
+
 	// Footer one-shot message (warnings, confirmations).
 	footer string
 
@@ -127,10 +132,50 @@ func Run() error {
 }
 
 // RunWith starts the dashboard with the given config and state.
+// With no providers configured, the setup wizard opens as a popup.
 func RunWith(cfg config.Config, st *state.File) error {
 	p := tea.NewProgram(New(cfg, st))
 	_, err := p.Run()
 	return err
+}
+
+// RunWizard starts the dashboard with the setup wizard popup already open
+// (used by `sslug setup`).
+func RunWizard(cfg config.Config, st *state.File, reconfigure string) error {
+	m := New(cfg, st)
+	m.openWizard(reconfigure)
+	p := tea.NewProgram(m)
+	_, err := p.Run()
+	return err
+}
+
+// openWizard mounts the setup wizard as a modal popup.
+func (m *model) openWizard(reconfigure string) {
+	w := wizard.New(m.cfg, reconfigure)
+	m.wiz = &w
+}
+
+// closeWizard handles a finished/aborted wizard popup.
+func (m *model) closeWizard() {
+	if m.wiz == nil {
+		return
+	}
+	if m.wiz.IsDone() {
+		m.cfg = m.wiz.Config()
+		// Reload palette in case nothing else changed; cheap and consistent.
+		pal, warns := theme.LoadFromSettings(m.cfg.Settings)
+		m.palette = pal
+		if len(warns) > 0 {
+			m.footer = warns[0].Message
+		} else {
+			m.footer = "provider saved"
+		}
+	} else if err := m.wiz.Err(); err != nil {
+		m.footer = "setup: " + err.Error()
+	} else {
+		m.footer = "setup aborted"
+	}
+	m.wiz = nil
 }
 
 // New builds the root model (exported for tests).
@@ -151,6 +196,10 @@ func New(cfg config.Config, st *state.File) model {
 	if m.activeViewDef().Name == "full" && st.UI.View != "" && st.UI.View != "full" &&
 		m.viewByName(st.UI.View) == nil {
 		m.footer = fmt.Sprintf("unknown view %q — using full", st.UI.View)
+	}
+	// First run: the setup wizard opens as a popup over the dashboard.
+	if len(cfg.Providers) == 0 {
+		m.openWizard("")
 	}
 	return m
 }
@@ -228,6 +277,20 @@ func (m model) tickCmd() tea.Cmd {
 
 // Update implements tea.Model.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Wizard popup is modal: it gets every message first.
+	if m.wiz != nil {
+		if ws, ok := msg.(tea.WindowSizeMsg); ok {
+			m.width, m.height = ws.Width, ws.Height
+		}
+		wm, cmd := m.wiz.UpdateModel(msg)
+		m.wiz = &wm
+		if wm.IsDone() || wm.IsAborted() {
+			m.closeWizard()
+			return m, nil
+		}
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -350,7 +413,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.ov.form.Init()
 		}
 	case "a":
-		return m, tea.Quit // cmd layer runs the wizard after exit
+		m.openWizard("")
+		if m.wiz != nil {
+			return m, m.wiz.Init()
+		}
+		return m, nil
 	case "d":
 		if m.focused == panelStatus {
 			if p := m.selectedProvider(); p != nil {
@@ -815,7 +882,102 @@ func (m model) render() string {
 	if m.ov.kind != overlayNone {
 		frame = m.renderOverlay(frame)
 	}
+	if m.wiz != nil {
+		frame = m.renderWizardPopup(frame)
+	}
 	return frame
+}
+
+// renderWizardPopup centers the wizard over the dashboard frame, btop-modal
+// style: accent border, drop-shadow row spacing, background visible around it.
+func (m model) renderWizardPopup(base string) string {
+	content := m.wiz.Content()
+	// Bound the popup to the screen.
+	maxW := m.width - 6
+	if maxW > 84 {
+		maxW = 84
+	}
+	if maxW < 40 {
+		maxW = m.width - 2
+	}
+	// Trim content lines to width.
+	var lines []string
+	for _, l := range strings.Split(content, "\n") {
+		if lipgloss.Width(l) > maxW {
+			l = truncate(l, maxW)
+		}
+		lines = append(lines, l)
+	}
+	maxH := m.height - 4
+	if len(lines) > maxH && maxH > 4 {
+		lines = lines[:maxH]
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.palette[theme.BoxBorderFocus])).
+		Padding(0, 2).
+		Render(strings.Join(lines, "\n"))
+	if m.palette[theme.Bg] != "" {
+		box = lipgloss.NewStyle().
+			Background(lipgloss.Color(m.palette[theme.Bg])).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(m.palette[theme.BoxBorderFocus])).
+			Padding(0, 2).
+			Render(strings.Join(lines, "\n"))
+	}
+	return compositeCentered(base, box, m.width, m.height, " setup ")
+}
+
+// compositeCentered overlays content (with optional title spliced into its
+// top border) at the center of base, sized w×h.
+func compositeCentered(base, content string, w, h int, title string) string {
+	baseLines := strings.Split(base, "\n")
+	for len(baseLines) < h {
+		baseLines = append(baseLines, "")
+	}
+	ovLines := strings.Split(content, "\n")
+	ovW := 0
+	for _, l := range ovLines {
+		if lw := lipgloss.Width(l); lw > ovW {
+			ovW = lw
+		}
+	}
+	startY := (h - len(ovLines)) / 2
+	if startY < 0 {
+		startY = 0
+	}
+	startX := (w - ovW) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	for i, ol := range ovLines {
+		y := startY + i
+		if y >= len(baseLines) {
+			break
+		}
+		baseLine := []rune(baseLines[y])
+		// Strip ANSI for width math: pad by rune count (content already sized).
+		for len(baseLine) < startX {
+			baseLine = append(baseLine, ' ')
+		}
+		olRunes := []rune(ol)
+		end := startX + len(olRunes)
+		for len(baseLine) < end {
+			baseLine = append(baseLine, ' ')
+		}
+		copy(baseLine[startX:end], olRunes)
+		baseLines[y] = string(baseLine)
+	}
+	if title != "" && startY < len(baseLines) {
+		bl := []rune(baseLines[startY])
+		tr := []rune(title)
+		pos := startX + 3
+		if pos+len(tr) <= len(bl) {
+			copy(bl[pos:pos+len(tr)], tr)
+			baseLines[startY] = string(bl)
+		}
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 func (m model) renderHeader() string {
@@ -1024,44 +1186,42 @@ func (m model) renderPane(p panelID, y0, w, h int, compact bool) string {
 		Height(innerH).
 		Render(strings.Join(contentLines, "\n"))
 
-	// Embed the title into the top border line.
+	// Replace the top border line with the title-embedded version, built
+	// from separately-styled segments (never spliced into styled text).
 	lines := strings.Split(box, "\n")
 	if len(lines) > 0 {
-		lines[0] = embedTitle(lines[0], " "+title+" ", borderColor, m.palette)
+		lines[0] = buildTitleBorder(innerW+2, title, borderColor, bs, m.palette)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// embedTitle splices a title string into a border line at column 2.
-func embedTitle(borderLine, title, color string, pal theme.Palette) string {
-	runes := []rune(borderLine)
-	tr := []rune(title)
-	if len(runes) < len(tr)+3 {
-		return borderLine
+// buildTitleBorder constructs the top border line as SEPARATE styled
+// segments concatenated together — never spliced into a styled line, which
+// would corrupt escape sequences.
+func buildTitleBorder(w int, title, color string, bs lipgloss.Border, pal theme.Palette) string {
+	if w < 4 {
+		return ""
 	}
-	styled := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(title)
-	prefix := string(runes[:2])
-	suffix := string(runes[2+len(tr):])
-	return prefix + styled + suffix
+	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
+	titleTxt := " " + title + " "
+	fill := w - 2 - ansi.StringWidth(titleTxt) - 1 // corners + leading dash
+	if fill < 0 {
+		// Title too long for the border: cut it ANSI-safely.
+		titleTxt = ansi.Truncate(titleTxt, w-3, "")
+		fill = 0
+	}
+	return borderStyle.Render(bs.TopLeft+bs.Top) +
+		titleStyle.Render(titleTxt) +
+		borderStyle.Render(strings.Repeat(bs.Top, fill)+bs.TopRight)
 }
 
-// truncate shortens s to w display cells.
+// truncate shortens s to w display cells without breaking ANSI sequences.
 func truncate(s string, w int) string {
-	if lipgloss.Width(s) <= w {
+	if ansi.StringWidth(s) <= w {
 		return s
 	}
-	runes := []rune(s)
-	out := make([]rune, 0, w)
-	cw := 0
-	for _, r := range runes {
-		rw := lipgloss.Width(string(r))
-		if cw+rw > w {
-			break
-		}
-		out = append(out, r)
-		cw += rw
-	}
-	return string(out)
+	return ansi.Truncate(s, w, "")
 }
 
 // paneContent dispatches to the pane renderer.
