@@ -97,9 +97,14 @@ func TestSparkGlyphSets(t *testing.T) {
 	if blocks[7] <= blocks[0] {
 		t.Errorf("blocks rising: first %U last %U", blocks[0], blocks[7])
 	}
-	asciiG := Spark(vals, 8, "ascii")
-	if strings.ContainsAny(asciiG, "⣿⠤") {
-		t.Error("ascii set must not contain braille")
+	// Full-range assertion: ascii and blocks sets must contain ZERO runes
+	// from the braille block (U+2800–U+28FF), not just two sampled glyphs.
+	for _, set := range []string{"ascii", "blocks"} {
+		for _, r := range Spark(vals, 8, set) {
+			if r >= 0x2800 && r <= 0x28FF {
+				t.Errorf("set %q contains braille rune %U", set, r)
+			}
+		}
 	}
 	if !strings.Contains(Spark(vals, 8, "bogus"), "⣿") && !strings.ContainsRune(Spark(vals, 8, "bogus"), 0x2800) {
 		// bogus falls back to braille: braille-range runes expected

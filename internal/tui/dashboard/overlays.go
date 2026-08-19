@@ -236,6 +236,18 @@ func onOff(b bool) string {
 	return "off"
 }
 
+// optionalFloat validates a huh input that may be blank or a float.
+func optionalFloat(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
+		return fmt.Errorf("must be a number")
+	}
+	return nil
+}
+
 func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "q":
@@ -565,8 +577,10 @@ func (m model) openMeterForm(editName string) tea.Cmd {
 				return nil
 			}),
 		huh.NewInput().Title("unit").Value(&unit),
-		huh.NewInput().Title("current value (blank = 0)").Value(&usedStr),
-		huh.NewInput().Title("cap (blank = uncapped)").Value(&capStr),
+		huh.NewInput().Title("current value (blank = 0)").Value(&usedStr).
+			Validate(optionalFloat),
+		huh.NewInput().Title("cap (blank = uncapped)").Value(&capStr).
+			Validate(optionalFloat),
 		huh.NewSelect[string]().Title("reset").Options(resetOptions...).Value(&resetKind),
 		huh.NewInput().Title("reset argument (day 1-31 / mon..sun / YYYY-MM-DD)").Value(&resetDay),
 	)).WithWidth(60).WithShowHelp(true)
