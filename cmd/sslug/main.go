@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,18 @@ import (
 )
 
 var version = "dev"
+
+// versionString returns the ldflags-injected version, or the Go module
+// version embedded by `go install ...@latest`, or "dev".
+func versionString() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return version
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -48,7 +61,7 @@ func main() {
 	case "config":
 		runConfig(os.Args[2:])
 	case "version":
-		fmt.Println("sslug", version)
+		fmt.Println("sslug", versionString())
 	case "help", "--help", "-h":
 		printUsage()
 	default:
