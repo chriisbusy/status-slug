@@ -38,7 +38,8 @@ const (
 
 var stepNames = []string{"provider", "key", "verify", "models", "meters", "review"}
 
-// wizardData carries answers across steps.
+// wizardData carries answers across steps. Form fields bind directly to
+// these so a resize can rebuild the current form without losing input.
 type wizardData struct {
 	name, label, kind, baseURL string
 	keyRef, keyMaterial        string
@@ -49,6 +50,26 @@ type wizardData struct {
 	meters                     []config.Meter
 	attachCredits              bool
 	providerCount              int // providers already in config
+
+	// Live form field state (bound by huh fields).
+	presetSel      string
+	keySrc         string
+	pastedKey      string
+	locatePath     string
+	envName        string
+	fallbackChoice string
+	validateChoice string
+	selectedModels []string
+	customModel    string
+	addMeter       bool
+	meterDraft     meterDraft
+	summaryConfirm bool
+	addAnother     bool
+}
+
+// meterDraft is the in-progress meter form.
+type meterDraft struct {
+	name, unit, used, cap, resetKind, resetArg string
 }
 
 // Model is the wizard tea model — embeddable as a dashboard popup or
@@ -66,7 +87,6 @@ type Model struct {
 	err         error
 	reconfigure string
 	pendingDone func()
-	wantMeter   bool
 }
 
 // New builds the wizard for embedding (dashboard popup) or standalone run.
@@ -130,6 +150,30 @@ func (m Model) body() string {
 	return ""
 }
 
+// rebuildCurrentForm reconstructs the current step's huh form at the new
+// terminal size. Values survive because fields bind to wizardData.
+func (m *Model) rebuildCurrentForm() {
+	switch m.step {
+	case stepIdentity:
+		m.enterIdentity()
+	case stepKey:
+		m.enterKey()
+	case stepModels:
+		if m.form != nil {
+			m.enterModelsForm()
+		}
+	case stepMeters:
+		m.enterMeters()
+	case stepMeterForm:
+		m.enterMeterForm()
+	case stepSummary:
+		m.enterSummary()
+	case stepAddAnother:
+		m.enterAddAnother()
+	}
+	// stepValidate spinner / in-flight fetches: nothing to rebuild.
+}
+
 func (m Model) Init() tea.Cmd {
 	if m.form != nil {
 		return m.form.Init()
@@ -161,31 +205,7 @@ func Run(cfg config.Config, reconfigure string) (config.Config, error) {
 	return final.cfg, nil
 }
 
-// --- theming ---
-
-// huhTheme builds a huh theme from the active palette.
-func huhTheme(p theme.Palette) huh.Theme {
-	base := huh.ThemeCharm(true)
-	accent := lipgloss.Color(p[theme.Accent])
-	focused := &base.Focused
-	focused.Title = focused.Title.Foreground(accent).Bold(true)
-	focused.SelectSelector = focused.SelectSelector.Foreground(accent)
-	focused.MultiSelectSelector = focused.MultiSelectSelector.Foreground(accent)
-	focused.SelectedOption = focused.SelectedOption.Foreground(lipgloss.Color(p[theme.OK]))
-	focused.Option = focused.Option.Foreground(lipgloss.Color(p[theme.Fg]))
-	focused.Description = focused.Description.Foreground(lipgloss.Color(p[theme.Muted]))
-	focused.TextInput.Cursor.Foreground(accent)
-	focused.TextInput.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(p[theme.Muted]))
-	focused.ErrorIndicator = focused.ErrorIndicator.Foreground(lipgloss.Color(p[theme.Err]))
-	focused.ErrorMessage = focused.ErrorMessage.Foreground(lipgloss.Color(p[theme.Err]))
-	return themeFunc{styles: base}
-}
-
-type themeFunc struct{ styles *huh.Styles }
-
-func (t themeFunc) Theme(isDark bool) *huh.Styles { return t.styles }
-
-// newForm wraps a group in a themed, width-bounded huh form.
+// --- layout ---
 func (m Model) newForm(groups ...*huh.Group) *huh.Form {
 	w := 76
 	if m.width > 0 && m.width-8 < w {
@@ -195,7 +215,7 @@ func (m Model) newForm(groups ...*huh.Group) *huh.Form {
 		w = 40
 	}
 	return huh.NewForm(groups...).
-		WithTheme(huhTheme(m.palette)).
+		WithTheme(theme.HuhTheme(m.palette)).
 		WithWidth(w).
 		WithShowHelp(true)
 }
@@ -247,6 +267,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.rebuildCurrentForm()
+		if m.form != nil {
+			return m, m.form.Init()
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
@@ -347,18 +371,19 @@ func (m *Model) enterIdentity() {
 	}
 	presetOpts = append(presetOpts, huh.NewOption("Custom — your own endpoint", "Custom"))
 
-	presetSel := "Custom"
+	presetSel := &d.presetSel
+	*presetSel = "Custom"
 	if d.kind != "" {
 		for _, p := range provider.Presets {
 			if p.Kind == d.kind && p.BaseURL == d.baseURL {
-				presetSel = p.Name
+				*presetSel = p.Name
 			}
 		}
-		if presetSel == "Custom" && d.kind != "" && d.kind != "custom" {
+		if *presetSel == "Custom" && d.kind != "" && d.kind != "custom" {
 			// Kind matches a preset's kind; pick the first as a hint.
 			for _, p := range provider.Presets {
 				if p.Kind == d.kind {
-					presetSel = p.Name
+					*presetSel = p.Name
 					break
 				}
 			}
@@ -397,7 +422,7 @@ func (m *Model) enterIdentity() {
 				Title("Which preset?").
 				Description("Presets fill in the endpoint and auth style. Custom works with any OpenAI-compatible API.").
 				Options(presetOpts...).
-				Value(&presetSel),
+				Value(presetSel),
 		),
 		huh.NewGroup(
 			huh.NewInput().
@@ -411,13 +436,13 @@ func (m *Model) enterIdentity() {
 					}
 					return nil
 				}),
-		).WithHideFunc(func() bool { return presetSel != "Custom" }),
+		).WithHideFunc(func() bool { return *presetSel != "Custom" }),
 	)
 	d.name = strings.TrimSpace(d.name)
 	m.onFormDone(func() {
-		if presetSel == "Custom" {
+		if *presetSel == "Custom" {
 			d.kind = "custom"
-		} else if p := provider.FindPreset(presetSel); p != nil {
+		} else if p := provider.FindPreset(*presetSel); p != nil {
 			d.kind = p.Kind
 			d.baseURL = p.BaseURL
 		}

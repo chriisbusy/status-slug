@@ -929,7 +929,9 @@ func (m model) renderWizardPopup(base string) string {
 }
 
 // compositeCentered overlays content (with optional title spliced into its
-// top border) at the center of base, sized w×h.
+// top border) at the center of base, sized w×h. Fully ANSI-aware: all
+// slicing happens on display cells via x/ansi, never on raw runes — styled
+// sequences are never cut or misaligned.
 func compositeCentered(base, content string, w, h int, title string) string {
 	baseLines := strings.Split(base, "\n")
 	for len(baseLines) < h {
@@ -938,7 +940,7 @@ func compositeCentered(base, content string, w, h int, title string) string {
 	ovLines := strings.Split(content, "\n")
 	ovW := 0
 	for _, l := range ovLines {
-		if lw := lipgloss.Width(l); lw > ovW {
+		if lw := ansi.StringWidth(l); lw > ovW {
 			ovW = lw
 		}
 	}
@@ -950,34 +952,45 @@ func compositeCentered(base, content string, w, h int, title string) string {
 	if startX < 0 {
 		startX = 0
 	}
+	endX := startX + ovW
+
 	for i, ol := range ovLines {
 		y := startY + i
 		if y >= len(baseLines) {
 			break
 		}
-		baseLine := []rune(baseLines[y])
-		// Strip ANSI for width math: pad by rune count (content already sized).
-		for len(baseLine) < startX {
-			baseLine = append(baseLine, ' ')
+		bl := baseLines[y]
+		blW := ansi.StringWidth(bl)
+		left := ansi.Cut(bl, 0, min(startX, blW))
+		if pad := startX - ansi.StringWidth(left); pad > 0 {
+			left += strings.Repeat(" ", pad)
 		}
-		olRunes := []rune(ol)
-		end := startX + len(olRunes)
-		for len(baseLine) < end {
-			baseLine = append(baseLine, ' ')
+		right := ""
+		if blW > endX {
+			right = ansi.Cut(bl, endX, blW)
 		}
-		copy(baseLine[startX:end], olRunes)
-		baseLines[y] = string(baseLine)
+		baseLines[y] = left + ol + right
 	}
+
 	if title != "" && startY < len(baseLines) {
-		bl := []rune(baseLines[startY])
-		tr := []rune(title)
+		bl := baseLines[startY]
 		pos := startX + 3
-		if pos+len(tr) <= len(bl) {
-			copy(bl[pos:pos+len(tr)], tr)
-			baseLines[startY] = string(bl)
+		blW := ansi.StringWidth(bl)
+		tW := ansi.StringWidth(title)
+		if pos+tW <= blW {
+			left := ansi.Cut(bl, 0, pos)
+			right := ansi.Cut(bl, pos+tW, blW)
+			baseLines[startY] = left + title + right
 		}
 	}
 	return strings.Join(baseLines, "\n")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (m model) renderHeader() string {

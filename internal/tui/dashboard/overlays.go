@@ -583,7 +583,7 @@ func (m model) openMeterForm(editName string) tea.Cmd {
 			Validate(optionalFloat),
 		huh.NewSelect[string]().Title("reset").Options(resetOptions...).Value(&resetKind),
 		huh.NewInput().Title("reset argument (day 1-31 / mon..sun / YYYY-MM-DD)").Value(&resetDay),
-	)).WithWidth(60).WithShowHelp(true)
+	)).WithWidth(60).WithShowHelp(true).WithTheme(theme.HuhTheme(m.palette))
 
 	m.ov = overlayState{
 		kind:    overlayForm,
@@ -706,7 +706,7 @@ func (m model) newSettingsOverlay() overlayState {
 			huh.NewConfirm().Title("panel: favourites").Value(mapBool(panelToggles, "favourites")),
 			huh.NewConfirm().Title("panel: stats").Value(mapBool(panelToggles, "stats")),
 		),
-	).WithWidth(64)
+	).WithWidth(64).WithTheme(theme.HuhTheme(m.palette))
 
 	ov := overlayState{
 		kind:    overlayForm,
@@ -1035,59 +1035,14 @@ func (m model) renderOverlay(base string) string {
 	if m.ov.title != "" {
 		title = " " + m.ov.title + " "
 	}
-	box := lipgloss.NewStyle().
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(m.palette[theme.BoxBorderFocus])).
-		Background(lipgloss.Color(m.palette[theme.Bg])).
-		Padding(0, 1).
-		Render(content)
-
-	// Center on base frame.
-	baseLines := strings.Split(base, "\n")
-	ovLines := strings.Split(box, "\n")
-	ovW := 0
-	for _, l := range ovLines {
-		if w := lipgloss.Width(l); w > ovW {
-			ovW = w
-		}
+		Padding(0, 1)
+	if m.palette[theme.Bg] != "" {
+		boxStyle = boxStyle.Background(lipgloss.Color(m.palette[theme.Bg]))
 	}
-	startY := (len(baseLines) - len(ovLines)) / 2
-	if startY < 0 {
-		startY = 0
-	}
-	startX := (m.width - ovW) / 2
-	if startX < 0 {
-		startX = 0
-	}
-	for i, ol := range ovLines {
-		y := startY + i
-		if y >= len(baseLines) {
-			break
-		}
-		baseLine := []rune(baseLines[y])
-		// Pad base line to startX.
-		for len(baseLine) < startX {
-			baseLine = append(baseLine, ' ')
-		}
-		olRunes := []rune(ol)
-		end := startX + len(olRunes)
-		for len(baseLine) < end {
-			baseLine = append(baseLine, ' ')
-		}
-		copy(baseLine[startX:end], olRunes)
-		baseLines[y] = string(baseLine)
-	}
-	// Title on the overlay's top border.
-	if title != "" && startY < len(baseLines) {
-		bl := []rune(baseLines[startY])
-		tr := []rune(title)
-		pos := startX + 2
-		if pos+len(tr) <= len(bl) {
-			copy(bl[pos:pos+len(tr)], tr)
-			baseLines[startY] = string(bl)
-		}
-	}
-	return strings.Join(baseLines, "\n")
+	return compositeCentered(base, boxStyle.Render(content), m.width, m.height, title)
 }
 
 const helpMarkdown = `# sslug keys
