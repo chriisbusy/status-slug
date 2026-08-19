@@ -93,6 +93,35 @@ func TestConfigHomeOverride(t *testing.T) {
 	}
 }
 
+// TestAtomicSaveLeavesNoTemp: after a save, no .tmp-* files remain in the
+// config dir and the file has final content (M13).
+func TestAtomicSaveLeavesNoTemp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cfg := config.Default()
+	cfg.Providers = []config.Provider{{Name: "X", Enabled: true}}
+	if err := config.SaveTo(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".tmp-") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+	// Saved content must parse back to the same provider list.
+	got, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Providers) != 1 || got.Providers[0].Name != "X" {
+		t.Errorf("roundtrip after atomic save: %+v", got.Providers)
+	}
+}
+
 func TestXDGConfigHome(t *testing.T) {
 	t.Setenv("SSLUG_CONFIG_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")

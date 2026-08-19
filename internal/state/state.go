@@ -26,17 +26,27 @@ type UIState struct {
 
 // ProviderState holds everything known about one provider.
 type ProviderState struct {
-	LastCheck *CheckResult           `json:"last_check,omitempty"`
-	Ring      []float64              `json:"ring,omitempty"` // latency ms, oldest first, capped
-	Counters  Counters               `json:"counters"`
-	Models    map[string]*ModelState `json:"models,omitempty"` // model id → state
+	LastCheck    *CheckResult           `json:"last_check,omitempty"`
+	Ring         []float64              `json:"ring,omitempty"` // latency ms, oldest first, capped
+	Counters     Counters               `json:"counters"`
+	RecentErrors []ErrorEntry           `json:"recent_errors,omitempty"` // last 5 non-ok, newest first
+	Models       map[string]*ModelState `json:"models,omitempty"`        // model id → state
 }
 
 // ModelState holds per-model (favourite) state.
 type ModelState struct {
-	LastCheck *CheckResult `json:"last_check,omitempty"`
-	Ring      []float64    `json:"ring,omitempty"`
-	Counters  Counters     `json:"counters"`
+	LastCheck    *CheckResult `json:"last_check,omitempty"`
+	Ring         []float64    `json:"ring,omitempty"`
+	Counters     Counters     `json:"counters"`
+	RecentErrors []ErrorEntry `json:"recent_errors,omitempty"`
+}
+
+// ErrorEntry is one non-ok check outcome, kept for the inspect overlay.
+type ErrorEntry struct {
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason"`
+	HTTPCode  int       `json:"http_code,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // CheckResult is the outcome of one probe.
@@ -182,6 +192,12 @@ func (f *File) RecordCheck(provider string, res CheckResult, ringCap int) {
 	case "down":
 		p.Counters.Down++
 	}
+	if res.Status != "ok" && res.Status != "unknown" && res.Status != "" {
+		p.RecentErrors = appendError(p.RecentErrors, ErrorEntry{
+			Status: res.Status, Reason: res.Reason,
+			HTTPCode: res.HTTPCode, CheckedAt: res.CheckedAt,
+		})
+	}
 }
 
 // RecordModelCheck updates per-model state after a probe.
@@ -200,6 +216,21 @@ func (f *File) RecordModelCheck(provider, modelID string, res CheckResult, ringC
 	case "down":
 		m.Counters.Down++
 	}
+	if res.Status != "ok" && res.Status != "unknown" && res.Status != "" {
+		m.RecentErrors = appendError(m.RecentErrors, ErrorEntry{
+			Status: res.Status, Reason: res.Reason,
+			HTTPCode: res.HTTPCode, CheckedAt: res.CheckedAt,
+		})
+	}
+}
+
+// appendError prepends an error entry, keeping at most 5 (newest first).
+func appendError(errs []ErrorEntry, e ErrorEntry) []ErrorEntry {
+	errs = append([]ErrorEntry{e}, errs...)
+	if len(errs) > 5 {
+		errs = errs[:5]
+	}
+	return errs
 }
 
 // SetMeter records a live meter value.

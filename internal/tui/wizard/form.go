@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,6 +137,7 @@ func runOne(cfg config.Config, reconfigure string) (*config.Provider, string, er
 	envVars := DetectEnvVars(os.Environ())
 	keyOptions := []huh.Option[string]{
 		huh.NewOption("Paste key now", "paste"),
+		huh.NewOption("Locate file containing the key", "locate"),
 		huh.NewOption("No key (local / none)", "none"),
 	}
 	for _, v := range envVars {
@@ -156,28 +158,84 @@ func runOne(cfg config.Config, reconfigure string) (*config.Provider, string, er
 
 	switch {
 	case keySrc == "none":
-		keyRef = "none"
-	case keySrc == "paste":
-		step2b := huh.NewForm(huh.NewGroup(
-			huh.NewInput().
-				Title("Paste API key").
-				Password(true).
-				Value(&keyVal),
+		keyRef, keyMaterial, _ = KeyRef("none", "", name)
+	case keySrc == "locate":
+		// huh FilePicker: user points at a file; its contents become the key.
+		var filePath string
+		fp := huh.NewForm(huh.NewGroup(
+			huh.NewFilePicker().
+				Title("Select key file").
+				Value(&filePath),
 		))
-		if err := step2b.Run(); err != nil {
+		if err := fp.Run(); err != nil {
 			return nil, "", err
 		}
-		// Store to keyring; if unavailable, offer file fallback.
-		if secret.KeyringAvailable() {
-			keyRef = "keyring:" + strings.Map(func(r rune) rune {
-				if 'a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '-' {
-					return r
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, "", fmt.Errorf("read key file: %w", err)
+		}
+		keyVal = strings.TrimSpace(string(data))
+		if keyVal == "" {
+			return nil, "", fmt.Errorf("key file %s is empty", filePath)
+		}
+		keySrc = "paste" // fall through to paste storage path
+		fallthrough
+	case keySrc == "paste":
+		if keySrc == "paste" && keyVal == "" {
+			step2b := huh.NewForm(huh.NewGroup(
+				huh.NewInput().
+					Title("Paste API key").
+					Password(true).
+					Value(&keyVal),
+			))
+			if err := step2b.Run(); err != nil {
+				return nil, "", err
+			}
+		}
+		// Storage destination follows settings.keys_source.
+		ks := cfg.Settings.KeysSource
+		if ks == "" || ks == "auto" {
+			ks = "keyring"
+			if !secret.KeyringAvailable() {
+				ks = "" // force the explicit fallback dialog below
+			}
+		}
+		switch ks {
+		case "keyring", "file", "env":
+			var err error
+			if ks == "file" {
+				// Plaintext-at-rest: explicit warning per plan.
+				var ack bool
+				warn := huh.NewForm(huh.NewGroup(
+					huh.NewConfirm().
+						Title("Store key in a 0600 file? Plaintext at rest (curl .netrc standard).").
+						Affirmative("Store in file").
+						Negative("Abort").
+						Value(&ack),
+				))
+				if err := warn.Run(); err != nil || !ack {
+					return nil, "", nil
 				}
-				return '-'
-			}, strings.ToLower(name))
-			keyMaterial = keyVal
-		} else {
+			}
+			if ks == "env" {
+				var envName string
+				envForm := huh.NewForm(huh.NewGroup(
+					huh.NewInput().Title("Environment variable name").Value(&envName),
+				))
+				if err := envForm.Run(); err != nil {
+					return nil, "", err
+				}
+				keyRef, keyMaterial, err = KeyRef("env", envName, name)
+			} else {
+				keyRef, keyMaterial, err = KeyRef(ks, keyVal, name)
+			}
+			if err != nil {
+				return nil, "", err
+			}
+		default:
+			// keyring unavailable under auto: explicit choice.
 			var fbChoice string
+			var err error
 			fb := huh.NewForm(huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Keyring unavailable. Store key how?").
@@ -191,11 +249,7 @@ func runOne(cfg config.Config, reconfigure string) (*config.Provider, string, er
 			if err := fb.Run(); err != nil || fbChoice == "abort" {
 				return nil, "", nil
 			}
-			if fbChoice == "file" {
-				keyRef = "file:" + strings.ToLower(name)
-				keyMaterial = keyVal
-			} else {
-				// Ask for env var name.
+			if fbChoice == "env" {
 				var envName string
 				envForm := huh.NewForm(huh.NewGroup(
 					huh.NewInput().Title("Environment variable name").Value(&envName),
@@ -203,12 +257,21 @@ func runOne(cfg config.Config, reconfigure string) (*config.Provider, string, er
 				if err := envForm.Run(); err != nil {
 					return nil, "", err
 				}
-				keyRef = "env:" + envName
+				keyRef, keyMaterial, err = KeyRef("env", envName, name)
+			} else {
+				keyRef, keyMaterial, err = KeyRef("file", keyVal, name)
+			}
+			if err != nil {
+				return nil, "", err
 			}
 		}
 	case strings.HasPrefix(keySrc, "env:"):
 		envVar := strings.TrimPrefix(keySrc, "env:")
-		keyRef = "env:" + envVar
+		var err error
+		keyRef, keyMaterial, err = KeyRef("env", envVar, name)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 
 	// --- Step 3: validate key (if we have one) ---
@@ -220,7 +283,8 @@ func runOne(cfg config.Config, reconfigure string) (*config.Provider, string, er
 		if resolvedKey != "" {
 			doer := check.NewDoer(8*time.Second, resolvedKey)
 			adapter := provider.New(kind)
-			res := adapter.Probe(context.Background(), doer, baseURL)
+			trial := config.Provider{Name: name, Kind: kind, BaseURL: baseURL}
+			res := adapter.Probe(context.Background(), doer, trial)
 			msg := fmt.Sprintf("Probe result: %s — %s", res.Status, res.Reason)
 			if res.Status != check.OK {
 				var action string
@@ -331,6 +395,18 @@ func runOne(cfg config.Config, reconfigure string) (*config.Provider, string, er
 	return &p, keyMaterial, nil
 }
 
+// optionalFloat validates a huh input that may be blank or a float.
+func optionalFloat(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
+		return fmt.Errorf("must be a number")
+	}
+	return nil
+}
+
 // meterForm runs one meter definition dialog.
 func meterForm() (*config.Meter, error) {
 	var (
@@ -348,8 +424,10 @@ func meterForm() (*config.Meter, error) {
 			return nil
 		}),
 		huh.NewInput().Title("Unit (e.g. USD, kWh, credits)").Value(&unit),
-		huh.NewInput().Title("Current value (number, blank = 0)").Value(&usedStr),
-		huh.NewInput().Title("Cap (number, blank = uncapped)").Value(&capStr),
+		huh.NewInput().Title("Current value (number, blank = 0)").Value(&usedStr).
+			Validate(optionalFloat),
+		huh.NewInput().Title("Cap (number, blank = uncapped)").Value(&capStr).
+			Validate(optionalFloat),
 		huh.NewSelect[string]().
 			Title("Reset schedule").
 			Options(
@@ -365,8 +443,13 @@ func meterForm() (*config.Meter, error) {
 	}
 
 	m := &config.Meter{Name: name, Unit: unit, Kind: "manual"}
-	fmt.Sscanf(usedStr, "%f", &m.Used)
-	fmt.Sscanf(capStr, "%f", &m.Cap)
+	// Both fields validated as numbers (or blank) above.
+	if s := strings.TrimSpace(usedStr); s != "" {
+		m.Used, _ = strconv.ParseFloat(s, 64)
+	}
+	if s := strings.TrimSpace(capStr); s != "" {
+		m.Cap, _ = strconv.ParseFloat(s, 64)
+	}
 
 	switch reset {
 	case "monthly":

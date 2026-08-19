@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chriisbusy/status-slug/internal/check"
+	"github.com/chriisbusy/status-slug/internal/config"
 )
 
 // Preset is a known provider template.
@@ -43,15 +44,17 @@ func FindPreset(name string) *Preset {
 }
 
 // Adapter is the per-kind probe/list/usage interface.
+// Methods take the full provider config so kind-specific options
+// (probe_url, probe_mode) are honored.
 type Adapter interface {
 	// Probe checks provider-level health.
-	Probe(ctx context.Context, doer *check.Doer, baseURL string) check.Result
+	Probe(ctx context.Context, doer *check.Doer, p config.Provider) check.Result
 	// ProbeModel checks one model with a minimal chat completion.
-	ProbeModel(ctx context.Context, doer *check.Doer, baseURL, modelID string) check.Result
+	ProbeModel(ctx context.Context, doer *check.Doer, p config.Provider, modelID string) check.Result
 	// ListModels returns available model IDs.
-	ListModels(ctx context.Context, doer *check.Doer, baseURL string) ([]string, error)
+	ListModels(ctx context.Context, doer *check.Doer, p config.Provider) ([]string, error)
 	// FetchUsage fetches usage data for auto meters. Returns nil if unsupported.
-	FetchUsage(ctx context.Context, doer *check.Doer, baseURL, autoID string) (*UsageResult, error)
+	FetchUsage(ctx context.Context, doer *check.Doer, p config.Provider, autoID string) (*UsageResult, error)
 }
 
 // UsageResult is the output of an auto-usage adapter.
@@ -78,22 +81,26 @@ func New(kind string) Adapter {
 
 type openaiAdapter struct{}
 
-func (a openaiAdapter) Probe(ctx context.Context, d *check.Doer, baseURL string) check.Result {
-	return d.Get(ctx, baseURL+"/models")
+func (a openaiAdapter) Probe(ctx context.Context, d *check.Doer, p config.Provider) check.Result {
+	url := p.ProbeURL
+	if url == "" {
+		url = p.BaseURL + "/models"
+	}
+	return d.Get(ctx, url)
 }
 
-func (a openaiAdapter) ProbeModel(ctx context.Context, d *check.Doer, baseURL, modelID string) check.Result {
+func (a openaiAdapter) ProbeModel(ctx context.Context, d *check.Doer, p config.Provider, modelID string) check.Result {
 	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"ping"}],"max_tokens":1}`, modelID)
-	return d.Post(ctx, baseURL+"/chat/completions", []byte(body))
+	return d.Post(ctx, p.BaseURL+"/chat/completions", []byte(body))
 }
 
-func (a openaiAdapter) ListModels(ctx context.Context, d *check.Doer, baseURL string) ([]string, error) {
-	return ListModelsRaw(ctx, d, "openai-compatible", baseURL)
+func (a openaiAdapter) ListModels(ctx context.Context, d *check.Doer, p config.Provider) ([]string, error) {
+	return ListModelsRaw(ctx, d, "openai-compatible", p.BaseURL)
 }
 
-func (a openaiAdapter) FetchUsage(ctx context.Context, d *check.Doer, baseURL, autoID string) (*UsageResult, error) {
+func (a openaiAdapter) FetchUsage(ctx context.Context, d *check.Doer, p config.Provider, autoID string) (*UsageResult, error) {
 	if autoID == "openrouter-credits" {
-		return fetchOpenRouterCredits(ctx, d, baseURL)
+		return fetchOpenRouterCredits(ctx, d, p.BaseURL)
 	}
 	return nil, fmt.Errorf("unknown auto usage adapter %q", autoID)
 }
@@ -102,56 +109,67 @@ func (a openaiAdapter) FetchUsage(ctx context.Context, d *check.Doer, baseURL, a
 
 type anthropicAdapter struct{}
 
-func (a anthropicAdapter) Probe(ctx context.Context, d *check.Doer, baseURL string) check.Result {
-	return d.Do(ctx, "GET", baseURL+"/v1/models", nil, map[string]string{
-		"x-api-key":         d.Key,
+func (a anthropicAdapter) auth(d *check.Doer) *check.Doer {
+	d.AuthHeader = "x-api-key"
+	return d
+}
+
+func (a anthropicAdapter) Probe(ctx context.Context, d *check.Doer, p config.Provider) check.Result {
+	url := p.ProbeURL
+	if url == "" {
+		url = p.BaseURL + "/v1/models"
+	}
+	return a.auth(d).Do(ctx, "GET", url, nil, map[string]string{
 		"anthropic-version": "2023-06-01",
 	})
 }
 
-func (a anthropicAdapter) ProbeModel(ctx context.Context, d *check.Doer, baseURL, modelID string) check.Result {
+func (a anthropicAdapter) ProbeModel(ctx context.Context, d *check.Doer, p config.Provider, modelID string) check.Result {
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":1,"messages":[{"role":"user","content":"ping"}]}`, modelID)
-	return d.Do(ctx, "POST", baseURL+"/v1/messages", []byte(body), map[string]string{
+	return a.auth(d).Do(ctx, "POST", p.BaseURL+"/v1/messages", []byte(body), map[string]string{
 		"Content-Type":      "application/json",
-		"x-api-key":         d.Key,
 		"anthropic-version": "2023-06-01",
 	})
 }
 
-func (a anthropicAdapter) ListModels(ctx context.Context, d *check.Doer, baseURL string) ([]string, error) {
-	return ListModelsRaw(ctx, d, "anthropic", baseURL)
+func (a anthropicAdapter) ListModels(ctx context.Context, d *check.Doer, p config.Provider) ([]string, error) {
+	return ListModelsRaw(ctx, a.auth(d), "anthropic", p.BaseURL)
 }
 
-func (a anthropicAdapter) FetchUsage(_ context.Context, _ *check.Doer, _, _ string) (*UsageResult, error) {
+func (a anthropicAdapter) FetchUsage(_ context.Context, _ *check.Doer, _ config.Provider, _ string) (*UsageResult, error) {
 	return nil, nil
 }
 
 // --- google ---
 
+// googleAdapter sends the key via the x-goog-api-key header — never in the
+// URL, which proxies and access logs would record.
 type googleAdapter struct{}
 
-func (a googleAdapter) Probe(ctx context.Context, d *check.Doer, baseURL string) check.Result {
-	url := baseURL + "/v1beta/models"
-	if d.Key != "" {
-		url += "?key=" + d.Key
-	}
-	return d.Get(ctx, url)
+func (a googleAdapter) auth(d *check.Doer) *check.Doer {
+	d.AuthHeader = "x-goog-api-key"
+	return d
 }
 
-func (a googleAdapter) ProbeModel(ctx context.Context, d *check.Doer, baseURL, modelID string) check.Result {
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", baseURL, modelID)
-	if d.Key != "" {
-		url += "?key=" + d.Key
+func (a googleAdapter) Probe(ctx context.Context, d *check.Doer, p config.Provider) check.Result {
+	url := p.ProbeURL
+	if url == "" {
+		url = p.BaseURL + "/v1beta/models"
 	}
+	return a.auth(d).Get(ctx, url)
+}
+
+func (a googleAdapter) ProbeModel(ctx context.Context, d *check.Doer, p config.Provider, modelID string) check.Result {
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", p.BaseURL, modelID)
 	body := `{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":1}}`
-	return d.Post(ctx, url, []byte(body))
+	return a.auth(d).Post(ctx, url, []byte(body))
 }
 
-func (a googleAdapter) ListModels(ctx context.Context, d *check.Doer, baseURL string) ([]string, error) {
-	return ListModelsRaw(ctx, d, "google", baseURL)
+func (a googleAdapter) ListModels(ctx context.Context, d *check.Doer, p config.Provider) ([]string, error) {
+	return ListModelsRaw(ctx, a.auth(d), "google", p.BaseURL)
 }
 
-func (a googleAdapter) FetchUsage(_ context.Context, _ *check.Doer, _, _ string) (*UsageResult, error) {
+func (a googleAdapter) FetchUsage(_ context.Context, _ *check.Doer, _ config.Provider, _ string) (*UsageResult, error) {
 	return nil, nil
 }
 
@@ -166,12 +184,11 @@ func ListModelsRaw(ctx context.Context, d *check.Doer, kind, baseURL string) ([]
 	switch kind {
 	case "anthropic":
 		url = baseURL + "/v1/models"
-		headers = map[string]string{"x-api-key": d.Key, "anthropic-version": "2023-06-01"}
+		d.AuthHeader = "x-api-key"
+		headers = map[string]string{"anthropic-version": "2023-06-01"}
 	case "google":
 		url = baseURL + "/v1beta/models"
-		if d.Key != "" {
-			url += "?key=" + d.Key
-		}
+		d.AuthHeader = "x-goog-api-key"
 	default: // openai-compatible, custom
 		url = baseURL + "/models"
 	}
@@ -202,7 +219,7 @@ func ListModelsRaw(ctx context.Context, d *check.Doer, kind, baseURL string) ([]
 
 // rawGet issues a GET and returns the body and status code.
 func rawGet(ctx context.Context, d *check.Doer, url string, headers map[string]string) ([]byte, int, error) {
-	req, err := newReq(ctx, url, d.Key, headers)
+	req, err := newReq(ctx, url, d, headers)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -218,14 +235,18 @@ func rawGet(ctx context.Context, d *check.Doer, url string, headers map[string]s
 	return body, resp.StatusCode, nil
 }
 
-func newReq(ctx context.Context, url, key string, headers map[string]string) (*http.Request, error) {
+func newReq(ctx context.Context, url string, d *check.Doer, headers map[string]string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "sslug/1.0")
-	if key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("User-Agent", check.UserAgent)
+	if d.Key != "" {
+		if d.AuthHeader != "" {
+			req.Header.Set(d.AuthHeader, d.Key)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+d.Key)
+		}
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)

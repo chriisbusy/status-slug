@@ -51,9 +51,23 @@ echo "$STATUS_OUT" | jq -e '.providers[] | select(.name=="Neuralwatt") | .meters
 
 echo "== sslug status --format tmux =="
 TMUX_OUT=$("$SSLUG" status --format tmux)
-echo "$TMUX_OUT" | grep -q '●1' && ok "tmux green count" || fail "tmux green count: $TMUX_OUT"
-echo "$TMUX_OUT" | grep -q '◐1' && ok "tmux account count" || fail "tmux account count: $TMUX_OUT"
-echo "$TMUX_OUT" | grep -q '○1' && ok "tmux down count" || fail "tmux down count: $TMUX_OUT"
+# Exact line, not per-glyph greps — a glyph/count permutation must fail.
+[ "$TMUX_OUT" = '●1 ◐1 ○1' ] && ok "tmux exact line" || fail "tmux exact line: '$TMUX_OUT'"
+
+echo "== sslug check --strict exit 3 =="
+rc=0; "$SSLUG" check >/dev/null 2>&1 || rc=$?
+src=0; "$SSLUG" check --strict >/dev/null 2>&1 || src=$?
+[ "$rc" -eq 0 ] && ok "check exit 0" || fail "check exit $rc"
+[ "$src" -eq 3 ] && ok "strict exit 3" || fail "strict exit $src (want 3)"
+
+echo "== sslug check --provider filter =="
+FILTER_OUT=$("$SSLUG" check --provider MockOK --json)
+echo "$FILTER_OUT" | jq -e '[.results[].provider] | unique == ["MockOK"]' >/dev/null \
+    && ok "provider filter" || fail "provider filter: $FILTER_OUT"
+
+echo "== favourite model probed =="
+echo "$CHECK_OUT" | jq -e '.results[] | select(.provider=="MockOK" and .model=="mock-alpha" and .status=="ok")' >/dev/null \
+    && ok "favourite chat probe row" || fail "no favourite model row in check --json"
 
 echo "== sslug serve =="
 "$SSLUG" serve --listen "127.0.0.1:$SERVE_PORT" &
@@ -66,6 +80,23 @@ done
 curl -sf "http://127.0.0.1:$SERVE_PORT/status.json" | jq -e '.schema == 1' >/dev/null && ok "serve /status.json schema" || fail "serve /status.json schema"
 curl -sf "http://127.0.0.1:$SERVE_PORT/usage.json" | jq -e '.[0].windows[0].label' >/dev/null && ok "serve /usage.json" || fail "serve /usage.json"
 kill $SERVE_PID 2>/dev/null || true
+
+echo "== serve refuses non-loopback =="
+if "$SSLUG" serve --listen "0.0.0.0:$SERVE_PORT" >/dev/null 2>&1; then
+    fail "serve bound 0.0.0.0 without refusing"
+else
+    ok "serve refuses non-loopback"
+fi
+
+echo "== doctor fails on broken config =="
+BAD_CFG="$(mktemp -d)"
+printf 'version = "oops"\n[' > "$BAD_CFG/config.toml"
+if SSLUG_CONFIG_HOME="$BAD_CFG" "$SSLUG" doctor >/dev/null 2>&1; then
+    fail "doctor exited 0 on broken config"
+else
+    ok "doctor exit non-zero on broken config"
+fi
+rm -rf "$BAD_CFG"
 
 echo "== sslug doctor =="
 "$SSLUG" doctor >/dev/null 2>&1 && ok "doctor exit 0" || fail "doctor exit non-zero"

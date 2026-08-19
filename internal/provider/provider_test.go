@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ func TestProbeModelPostsMaxTokens1(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[]}`)
 	})
 	adapter := provider.New("openai-compatible")
-	r := adapter.ProbeModel(context.Background(), d, srv.URL+"/v1", "gpt-5-mini")
+	r := adapter.ProbeModel(context.Background(), d, config.Provider{BaseURL: srv.URL + "/v1"}, "gpt-5-mini")
 	if r.Status != check.OK {
 		t.Fatalf("probe: %v", r)
 	}
@@ -109,7 +110,7 @@ func TestOpenRouterCreditsAdapter(t *testing.T) {
 	// baseURL is the API root; credits adapter appends /credits.
 	base := srv.URL + "/api/v1"
 	adapter := provider.New("openai-compatible")
-	ur, err := adapter.FetchUsage(context.Background(), d, base, "openrouter-credits")
+	ur, err := adapter.FetchUsage(context.Background(), d, config.Provider{BaseURL: base}, "openrouter-credits")
 	if err != nil {
 		t.Fatalf("FetchUsage: %v", err)
 	}
@@ -125,6 +126,35 @@ func TestOpenRouterCreditsAdapter(t *testing.T) {
 	}
 	if ur.FetchedAt.IsZero() {
 		t.Error("fetched_at is zero")
+	}
+}
+
+// TestGoogleKeyInHeaderNotURL: the key must travel in the x-goog-api-key
+// header and never in the URL (P1: URLs are logged by proxies/servers).
+func TestGoogleKeyInHeaderNotURL(t *testing.T) {
+	canary := "CANARYgooglekey998877665511"
+	var gotQuery, gotHeader, gotAuth string
+	srv, d := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		gotHeader = r.Header.Get("x-goog-api-key")
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"models":[{"name":"models/gemini-2.0-flash"}]}`)
+	})
+	d.Key = canary
+	adapter := provider.New("google")
+	r := adapter.Probe(context.Background(), d, config.Provider{BaseURL: srv.URL})
+	if r.Status != check.OK {
+		t.Fatalf("probe: %v", r)
+	}
+	if strings.Contains(gotQuery, canary) || strings.Contains(gotQuery, "key=") {
+		t.Errorf("key material in URL query: %q", gotQuery)
+	}
+	if gotHeader != canary {
+		t.Errorf("x-goog-api-key header: got %q", gotHeader)
+	}
+	if gotAuth != "" {
+		t.Errorf("stray Authorization header on google probe: %q", gotAuth)
 	}
 }
 
@@ -195,6 +225,43 @@ func TestMoshiBuild(t *testing.T) {
 	}
 	if snaps2[0].Cost.Used != 78.2 || snaps2[0].Cost.Limit != 100.0 {
 		t.Errorf("cost: %+v", snaps2[0].Cost)
+	}
+}
+
+// TestMoshiBuild_NonUSDNoCost: cost{} must only appear for USD-unit meters.
+func TestMoshiBuild_NonUSDNoCost(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.Provider{{
+		Name: "WattProv", Kind: "custom", Enabled: true,
+		Meters: []config.Meter{{Name: "Energy", Unit: "kWh", Kind: "manual", Cap: 1000, Reset: "monthly:1"}},
+	}}
+	st := state.New()
+	st.SetMeter("WattProv", "Energy", 100)
+	snaps := provider.MoshiBuild(cfg, st, time.Now())
+	if len(snaps) != 1 {
+		t.Fatalf("snaps: %d", len(snaps))
+	}
+	if snaps[0].Cost != nil {
+		t.Errorf("kWh meter must not emit cost{}: %+v", snaps[0].Cost)
+	}
+}
+
+// TestMoshiBuild_ConfigUsedFallback: a meter with only a config `used` value
+// (never touched by usage set) must still appear — BuildSnapshot and the
+// usage pane already fall back to it; moshi must agree.
+func TestMoshiBuild_ConfigUsedFallback(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.Provider{{
+		Name: "FreshProv", Kind: "custom", Enabled: true,
+		Meters: []config.Meter{{Name: "Spend", Unit: "USD", Kind: "manual", Used: 42.5, Cap: 100, Reset: "never"}},
+	}}
+	st := state.New() // no state value for the meter
+	snaps := provider.MoshiBuild(cfg, st, time.Now())
+	if len(snaps) != 1 {
+		t.Fatalf("config-only meter must appear: snaps=%d", len(snaps))
+	}
+	if snaps[0].Cost == nil || snaps[0].Cost.Used != 42.5 {
+		t.Errorf("fallback value: %+v", snaps[0].Cost)
 	}
 }
 

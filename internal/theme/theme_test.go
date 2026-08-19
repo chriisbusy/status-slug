@@ -95,3 +95,21 @@ func TestBuiltinNames(t *testing.T) {
 		t.Errorf("builtin names: %v", names)
 	}
 }
+
+// TestThemePartialValid: one invalid line must not abort the whole file (M28).
+func TestThemePartialValid(t *testing.T) {
+	dir := t.TempDir()
+	content := "ok = \"#AABBCC\"\naccent = \"garbage\"\n"
+	os.WriteFile(filepath.Join(dir, "partial.theme"), []byte(content), 0o644)
+	p, warns := theme.Load("partial", dir)
+	if len(warns) == 0 {
+		t.Error("expected warning for invalid line")
+	}
+	if p[theme.OK] != "#AABBCC" {
+		t.Errorf("valid role must still apply: got %q", p[theme.OK])
+	}
+	sstop, _ := theme.Load("sstop", "")
+	if p[theme.Accent] != sstop[theme.Accent] {
+		t.Errorf("invalid role must fall back: got %q", p[theme.Accent])
+	}
+}

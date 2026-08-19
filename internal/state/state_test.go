@@ -112,6 +112,19 @@ func TestStatePathOverride(t *testing.T) {
 	}
 }
 
+// TestRelAgeBoundaries: seconds-precision must say "just now" (M20).
+func TestRelAgeBoundaries(t *testing.T) {
+	if got := state.RelAge(30 * time.Second); got != "just now" {
+		t.Errorf("30s: got %q want 'just now'", got)
+	}
+	if got := state.RelAge(59 * time.Second); got != "just now" {
+		t.Errorf("59s: got %q want 'just now'", got)
+	}
+	if got := state.RelAge(61 * time.Second); got != "1m ago" {
+		t.Errorf("61s: got %q want '1m ago'", got)
+	}
+}
+
 func TestJSONShape(t *testing.T) {
 	// Verify the serialized shape includes the expected top-level keys.
 	f := state.New()

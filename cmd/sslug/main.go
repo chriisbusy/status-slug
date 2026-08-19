@@ -7,10 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/log"
 
 	"github.com/chriisbusy/status-slug/internal/check"
 	"github.com/chriisbusy/status-slug/internal/config"
@@ -23,6 +26,35 @@ import (
 )
 
 var version = "dev"
+
+// setupLog wires --verbose to a styled file log at the state dir.
+// Keys are never logged (CONSTITUTION invariant 1).
+// Returns the remaining args with the flag stripped.
+func setupLog(args []string) []string {
+	verbose := false
+	out := args[:0]
+	for _, a := range args {
+		if a == "--verbose" || a == "-v" {
+			verbose = true
+		} else {
+			out = append(out, a)
+		}
+	}
+	if !verbose {
+		return out
+	}
+	logPath := filepath.Join(filepath.Dir(state.Path()), "sslug.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sslug: cannot open log file: %v\n", err)
+		return out
+	}
+	log.SetOutput(f)
+	log.SetLevel(log.DebugLevel)
+	log.SetReportTimestamp(true)
+	log.Debug("sslug starting", "version", versionString(), "pid", os.Getpid())
+	return out
+}
 
 // versionString returns the ldflags-injected version, or the Go module
 // version embedded by `go install ...@latest`, or "dev".
@@ -37,6 +69,8 @@ func versionString() string {
 }
 
 func main() {
+	os.Args = append(os.Args[:1], setupLog(os.Args[1:])...)
+	check.UserAgent = "sslug/" + versionString()
 	if len(os.Args) < 2 {
 		runDashboard(os.Args[1:])
 		return
@@ -172,31 +206,9 @@ func runCheck(args []string) {
 		timeout = 10 * time.Second
 	}
 
-	type target struct {
-		prov    config.Provider
-		model   string // empty = provider-level
-		key     string
-		adapter provider.Adapter
-	}
-	var targets []target
-	for _, p := range cfg.Providers {
-		if !p.Enabled {
-			continue
-		}
-		if *providerFlag != "" && p.Name != *providerFlag {
-			continue
-		}
-		key := resolveKey(p)
-		adapter := provider.New(p.Kind)
-		targets = append(targets, target{p, "", key, adapter})
-		for _, m := range p.Models {
-			if m.Favourite {
-				targets = append(targets, target{p, m.ID, key, adapter})
-			}
-		}
-	}
+	jobs := provider.BuildJobs(cfg, resolveKey, timeout, *providerFlag)
 
-	if len(targets) == 0 {
+	if len(jobs) == 0 {
 		if *jsonFlag {
 			fmt.Println(`{"schema":1,"results":[]}`)
 		} else {
@@ -206,21 +218,6 @@ func runCheck(args []string) {
 	}
 
 	ctx := context.Background()
-	jobs := make([]check.Job, len(targets))
-	for i, t := range targets {
-		t := t
-		jobs[i] = check.Job{
-			Provider: t.prov.Name,
-			ModelID:  t.model,
-			Run: func(ctx context.Context) check.Result {
-				doer := check.NewDoer(timeout, t.key)
-				if t.model == "" {
-					return t.adapter.Probe(ctx, doer, t.prov.BaseURL)
-				}
-				return t.adapter.ProbeModel(ctx, doer, t.prov.BaseURL, t.model)
-			},
-		}
-	}
 
 	ch := make(chan check.JobResult, len(jobs))
 	go check.Run(ctx, jobs, ch)
@@ -239,6 +236,8 @@ func runCheck(args []string) {
 
 	for jr := range ch {
 		res := jr.Result
+		log.Debug("probe result", "provider", jr.Job.Provider, "model", jr.Job.ModelID,
+			"status", res.Status, "http", res.HTTPCode, "latency_ms", res.LatencyMs)
 		scr := state.CheckResult{
 			Status:    string(res.Status),
 			Reason:    res.Reason,
@@ -280,7 +279,7 @@ func runCheck(args []string) {
 			key := resolveKey(p)
 			doer := check.NewDoer(timeout, key)
 			adapter := provider.New(p.Kind)
-			ur, err := adapter.FetchUsage(ctx, doer, p.BaseURL, m.Auto)
+			ur, err := adapter.FetchUsage(ctx, doer, p, m.Auto)
 			if err == nil && ur != nil {
 				st.SetMeter(p.Name, m.Name, ur.Value)
 			}
@@ -470,12 +469,34 @@ func runUsageSet(args []string) {
 
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	listen := fs.String("listen", "127.0.0.1:19777", "listen address (loopback only)")
+	listen := fs.String("listen", "", "listen address (loopback only)")
 	fs.Parse(args)
 
+	cfg := mustLoadConfig()
+	addr := "127.0.0.1:19777"
+	if cfg.Settings.ServeListen != "" {
+		addr = cfg.Settings.ServeListen
+	}
+	// Explicit flag wins and is persisted (plan: "--listen and config-saved").
+	flagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "listen" {
+			flagSet = true
+		}
+	})
+	if flagSet {
+		addr = *listen
+		if cfg.Settings.ServeListen != addr {
+			cfg.Settings.ServeListen = addr
+			if err := config.Save(cfg); err != nil {
+				fmt.Fprintf(os.Stderr, "sslug: warning: could not persist listen addr: %v\n", err)
+			}
+		}
+	}
+
 	mux := serve.NewMux()
-	fmt.Printf("sslug serve listening on http://%s\n", *listen)
-	if err := serve.ListenAndServe(*listen, mux); err != nil {
+	fmt.Printf("sslug serve listening on http://%s\n", addr)
+	if err := serve.ListenAndServe(addr, mux); err != nil {
 		fatal("serve", err)
 	}
 }

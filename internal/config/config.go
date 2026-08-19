@@ -34,6 +34,7 @@ type Settings struct {
 	AlertBell     bool   `toml:"alert_bell"`
 	BorderStyle   string `toml:"border_style"`
 	GraphGlyphs   string `toml:"graph_glyphs"`
+	ServeListen   string `toml:"serve_listen,omitempty"` // saved by serve --listen
 }
 
 // View is a named panel arrangement preset.
@@ -51,6 +52,7 @@ type Provider struct {
 	Label     string  `toml:"label"`
 	Kind      string  `toml:"kind"`
 	BaseURL   string  `toml:"base_url"`
+	ProbeURL  string  `toml:"probe_url,omitempty"` // custom health-check GET; default <base>/models
 	KeyRef    string  `toml:"key_ref"`
 	Enabled   bool    `toml:"enabled"`
 	ProbeMode string  `toml:"probe_mode,omitempty"`

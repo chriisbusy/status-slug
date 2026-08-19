@@ -53,13 +53,19 @@ func MoshiBuild(cfg config.Config, st *state.File, now time.Time) []MoshiSnapsho
 		}
 		for _, m := range p.Meters {
 			mv := st.GetMeter(p.Name, m.Name)
-			if mv == nil {
-				continue
+			// Fall back to the config-defined initial value — the same
+			// fallback BuildSnapshot and the usage pane apply, so all three
+			// JSON/TUI surfaces agree about the same meter.
+			value := m.Used
+			if mv != nil {
+				value = mv.Value
+			} else if m.Used == 0 && m.Cap == 0 {
+				continue // nothing configured at all — skip
 			}
 			resetsAt := resolveReset(m.Reset, now)
 			var pct float64
 			if m.Cap > 0 {
-				pct = mv.Value / m.Cap * 100
+				pct = value / m.Cap * 100
 			}
 			snap.Windows = append(snap.Windows, MoshiWindow{
 				Label:          m.Name,
@@ -67,7 +73,7 @@ func MoshiBuild(cfg config.Config, st *state.File, now time.Time) []MoshiSnapsho
 				ResetsAt:       resetsAt,
 			})
 			if m.Unit == "USD" && snap.Cost == nil {
-				snap.Cost = &MoshiCost{Used: mv.Value, Limit: m.Cap, Unit: "USD"}
+				snap.Cost = &MoshiCost{Used: value, Limit: m.Cap, Unit: "USD"}
 			}
 		}
 		if len(snap.Windows) > 0 || snap.Cost != nil {

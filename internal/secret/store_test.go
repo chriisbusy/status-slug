@@ -1,6 +1,8 @@
 package secret_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,12 +10,12 @@ import (
 )
 
 func TestResolveEnv(t *testing.T) {
-	t.Setenv("TEST_SSLUG_KEY", "sk-canary-abcdef123456")
+	t.Setenv("TEST_SSLUG_KEY", "CANARYabcdef123456789")
 	v, err := secret.Resolve("env:TEST_SSLUG_KEY")
 	if err != nil {
 		t.Fatalf("resolve env: %v", err)
 	}
-	if v != "sk-canary-abcdef123456" {
+	if v != "CANARYabcdef123456789" {
 		t.Errorf("got %q", v)
 	}
 }
@@ -39,7 +41,7 @@ func TestResolveNone(t *testing.T) {
 func TestResolveFile(t *testing.T) {
 	// Use a temp config dir so we don't touch the real store.
 	t.Setenv("SSLUG_CONFIG_HOME", t.TempDir())
-	canary := "sk-canary-file-9876543210"
+	canary := "CANARYfile9876543210"
 	if err := secret.Store("file:testkey", canary); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
@@ -52,8 +54,28 @@ func TestResolveFile(t *testing.T) {
 	}
 }
 
+// TestStoreFileMode0600: the file fallback must be 0600 (M03b).
+func TestStoreFileMode0600(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSLUG_CONFIG_HOME", dir)
+	if err := secret.Store("file:modetest", "material"); err != nil {
+		t.Fatal(err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "secrets", "*.key"))
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 key file, got %v", matches)
+	}
+	info, err := os.Stat(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("secret file mode: got %o want 600", perm)
+	}
+}
+
 func TestNegativeCanaryNotInErrors(t *testing.T) {
-	canary := "sk-canary-abcdef1234567890"
+	canary := "CANARYabcdef1234567897890"
 	t.Setenv("CANARY_KEY", canary)
 
 	// Trigger error paths with the canary present in env.

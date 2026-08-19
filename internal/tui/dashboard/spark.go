@@ -12,10 +12,61 @@ var dotBit = [2][4]int{
 	{3, 4, 5, 7}, // right column: dots 4,5,6,8
 }
 
-// Spark renders values as a braille sparkline of exactly width cells.
-// values are latency ms; min/max are computed from the slice if both are 0.
-// Empty slice → all blank cells. All-same values → mid-height flat line.
-func Spark(values []float64, width int) string {
+// Spark renders values as a sparkline of exactly width cells using the
+// configured glyph set: "braille" (2×4 dots), "blocks" (▁▂▃▄▅▆▇█), or
+// "ascii" (" .:-=+*#%@"). Unknown sets fall back to braille.
+func Spark(values []float64, width int, set string) string {
+	switch set {
+	case "blocks":
+		return sparkRamp(values, width, []rune(" ▁▂▃▄▅▆▇█"))
+	case "ascii":
+		return sparkRamp(values, width, []rune(" .:-=+*#%@"))
+	default:
+		return sparkBraille(values, width)
+	}
+}
+
+// sparkRamp renders one glyph per column using a leveled ramp.
+func sparkRamp(values []float64, width int, ramp []rune) string {
+	if width <= 0 {
+		return ""
+	}
+	out := make([]rune, width)
+	if len(values) == 0 {
+		for i := range out {
+			out[i] = ramp[0]
+		}
+		return string(out)
+	}
+	lo, hi := values[0], values[0]
+	for _, v := range values {
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	rng := hi - lo
+	sampled := resample(values, width)
+	levels := len(ramp) - 1
+	for i, v := range sampled {
+		var lvl int
+		if rng == 0 {
+			lvl = levels / 2
+		} else {
+			lvl = int((v - lo) / rng * float64(levels))
+			if lvl > levels {
+				lvl = levels
+			}
+		}
+		out[i] = ramp[lvl]
+	}
+	return string(out)
+}
+
+// sparkBraille is the original 2×4-dot renderer.
+func sparkBraille(values []float64, width int) string {
 	if width <= 0 {
 		return ""
 	}

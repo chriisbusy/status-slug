@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -115,9 +116,20 @@ func extractErrorMessage(body []byte) string {
 }
 
 // classifyTransportErr maps a network error to a reason string.
+// CONSTITUTION invariant 1: key material must never appear in the result.
+// *url.Error.Error() embeds the request URL, which can carry query-param
+// credentials — so we never surface it; we unwrap to the inner cause.
 func classifyTransportErr(err error) string {
 	if err == nil {
 		return ""
+	}
+	// Unwrap *url.Error first: its message includes the full request URL.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		if urlErr.Err != nil {
+			return classifyTransportErr(urlErr.Err)
+		}
+		return "request failed: " + urlErr.Op
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
@@ -138,25 +150,69 @@ func classifyTransportErr(err error) string {
 		return "canceled"
 	}
 	msg := err.Error()
-	// Scrub anything that could be a URL-embedded key.
+	// Final fallback: scrub URLs and anything that looks like key material.
+	msg = scrubSensitive(msg)
 	if len(msg) > 200 {
 		msg = msg[:200] + "…"
 	}
 	return msg
 }
 
+// scrubSensitive removes URLs and long alphanumeric runs (plausible keys)
+// from an error string.
+func scrubSensitive(s string) string {
+	// Strip URLs entirely.
+	for strings.Contains(s, "://") {
+		pre, rest, _ := strings.Cut(s, "://")
+		// Remove the scheme word at the end of pre.
+		if i := strings.LastIndexAny(pre, " \"'`("); i >= 0 {
+			pre = pre[:i+1]
+		} else {
+			pre = ""
+		}
+		// Remove the URL tail from rest (up to first space/quote).
+		if i := strings.IndexAny(rest, " \"'`"); i >= 0 {
+			rest = rest[i:]
+		} else {
+			rest = ""
+		}
+		s = pre + "[url]" + rest
+	}
+	// Scrub long alnum runs.
+	words := strings.Fields(s)
+	for i, w := range words {
+		trimmed := strings.Trim(w, `"'.,;:()[]{}`)
+		if len(trimmed) >= 12 && isAlnumRun(trimmed) {
+			words[i] = strings.Replace(w, trimmed, trimmed[:2]+"****"+trimmed[len(trimmed)-2:], 1)
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func isAlnumRun(s string) bool {
+	for _, r := range s {
+		if !('0' <= r && r <= '9' || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // --- probe engine ---
 
-const userAgent = "sslug/1.0"
+// UserAgent is sent on every probe; main overrides it with the real version.
+var UserAgent = "sslug/dev"
 
 // PoolSize is the maximum concurrent probes.
 const PoolSize = 4
 
-// Doer performs an HTTP request, injecting the bearer key and timeout.
+// Doer performs an HTTP request, injecting credentials and timeout.
 type Doer struct {
 	Client  *http.Client
 	Timeout time.Duration
-	Key     string // bearer token; may be empty
+	Key     string // credential material; never logged
+	// AuthHeader names the header carrying Key. Empty = Authorization: Bearer.
+	AuthHeader string
 }
 
 // NewDoer builds a Doer with the given timeout and optional key.
@@ -188,9 +244,13 @@ func (d *Doer) Do(ctx context.Context, method, url string, body []byte, extraHea
 	if err != nil {
 		return Result{Status: Down, Reason: "bad request: " + err.Error(), CheckedAt: time.Now()}
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", UserAgent)
 	if d.Key != "" {
-		req.Header.Set("Authorization", "Bearer "+d.Key)
+		if d.AuthHeader != "" {
+			req.Header.Set(d.AuthHeader, d.Key)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+d.Key)
+		}
 	}
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -77,6 +78,44 @@ func TestClassify_NeverChecked(t *testing.T) {
 	// Status unknown is set by callers, not Classify — verify constant exists.
 	if check.Unknown != "unknown" {
 		t.Fail()
+	}
+}
+
+// TestClassify_URLErrorCanary: the P0 regression guard. A *url.Error carries
+// the full request URL; for query-param-keyed providers that URL contains key
+// material. Classify must never surface it in the reason.
+func TestClassify_URLErrorCanary(t *testing.T) {
+	canary := "CANARYleak111222333444555666999"
+	urlErr := &url.Error{
+		Op:  "Get",
+		URL: "https://generativelanguage.googleapis.com/v1beta/models?key=" + canary,
+		Err: errors.New("tls: failed to verify certificate"),
+	}
+	r := check.Classify(0, nil, urlErr, 0)
+	if strings.Contains(r.Reason, canary) {
+		t.Fatalf("KEY LEAK: canary in reason: %q", r.Reason)
+	}
+	if strings.Contains(r.Reason, "key=") {
+		t.Errorf("URL query leaked into reason: %q", r.Reason)
+	}
+	if r.Status != check.Down {
+		t.Errorf("status: got %q want down", r.Status)
+	}
+	// The underlying cause must survive unwrapping.
+	if !strings.Contains(r.Reason, "tls") {
+		t.Errorf("inner cause lost: %q", r.Reason)
+	}
+}
+
+// TestClassify_404ReasonIsSpecific: 404 on the probe URL must say so, not
+// fall through to the generic "unexpected" branch.
+func TestClassify_404ReasonIsSpecific(t *testing.T) {
+	r := check.Classify(404, []byte(`{}`), nil, 1)
+	if r.Status != check.Down {
+		t.Fatalf("status: got %q", r.Status)
+	}
+	if !strings.Contains(r.Reason, "probe endpoint") {
+		t.Errorf("reason %q should name the probe endpoint", r.Reason)
 	}
 }
 

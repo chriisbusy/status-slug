@@ -12,7 +12,7 @@
 [![ci](https://github.com/chriisbusy/status-slug/actions/workflows/ci.yml/badge.svg)](https://github.com/chriisbusy/status-slug/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/chriisbusy/status-slug.svg)](https://pkg.go.dev/github.com/chriisbusy/status-slug)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go 1.23+](https://img.shields.io/badge/go-1.23+-00ADD8.svg)](go.mod)
+[![Go 1.26+](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](go.mod)
 
 </div>
 
@@ -52,7 +52,7 @@ cd status-slug
 make build        # → ./sslug
 ```
 
-Requirements: Go 1.23+ to build; any modern terminal to run. A
+Requirements: Go 1.26+ to build (see `go.mod`); any modern terminal to run. A
 [Nerd Font](https://www.nerdfonts.com/) is optional — the default glyph set is
 plain Unicode (`●◐○`, blocks, braille) and degrades gracefully (`NO_COLOR`
 respected, non-truecolor terminals auto-degrade, narrow terminals reflow to a
