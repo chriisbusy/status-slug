@@ -1,0 +1,38 @@
+# agent/governance — local only
+AGENTS.md
+CLAUDE.md
+CONSTITUTION.md
+WORK.md
+ROADMAP.md
+PLAN.md
+.claude/
+.codex/
+.omp/
+.mcp.json
+.agents/
+.crush/
+.roo/
+.workqueue/
+
+# go
+/sslug
+/mockprovider
+*.test
+*.out
+/cover.out
+
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.secrets/
+
+# editor/os clutter
+.idea/
+.vscode/
+*.swp
+.DS_Store
+._*
+*.log
