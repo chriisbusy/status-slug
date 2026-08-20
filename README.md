@@ -85,7 +85,7 @@ Four panes, all configurable; presets cycle with `p`:
 
 Keys: `tab` cycle focus · `j/k` scroll · `c`/`⏎` check now · `i` inspect ·
 `s/u/f/t` pane menus · `p` view presets · `e` cycle themes (live) ·
-`o` options · `a` add provider (setup wizard popup) · `d` remove provider ·
+`o` options · `a` add provider · `r` edit provider (wizard popup) · `d` remove ·
 `z` zoom pane · `?` help · `q` quit.
 
 ## Usage meters

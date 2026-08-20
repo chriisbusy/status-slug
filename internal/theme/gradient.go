@@ -76,15 +76,27 @@ var ArtLines = []string{
 	"▄▄█ ▄▄█ █▄▄ █▄█ █▄█",
 }
 
-// Art renders the brand art with the palette gradient, with the
-// "· status slug" wordmark beside the graphic in muted text.
+// Art renders the SSLUG block art with per-letter colors from the palette —
+// btop-logo style, each letter its own role — plus the muted wordmark.
 func Art(p Palette) string {
-	body := strings.Join(ArtLines, "\n")
-	painted := GradientText(body, p[GradLo], p[GradHi])
-	word := lipgloss.NewStyle().Foreground(lipgloss.Color(p[Muted])).Render("  · status slug")
-	lines := strings.Split(painted, "\n")
+	roles := []Role{Accent, GradHi, OK, Warn, Err}
+	// Letter column spans in the fixed two-row font.
+	spans := [][2]int{{0, 3}, {4, 7}, {8, 11}, {12, 15}, {16, 19}}
+	var lines []string
+	for _, row := range ArtLines {
+		runes := []rune(row)
+		var b strings.Builder
+		for i, span := range spans {
+			chunk := string(runes[span[0]:span[1]])
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(p[roles[i]])).Render(chunk))
+			if span[1] < len(runes) {
+				b.WriteString(" ")
+			}
+		}
+		lines = append(lines, b.String())
+	}
 	if len(lines) > 1 {
-		lines[1] += word
+		lines[1] += lipgloss.NewStyle().Foreground(lipgloss.Color(p[Muted])).Render("  · status slug")
 	}
 	return strings.Join(lines, "\n")
 }

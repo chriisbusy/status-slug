@@ -30,7 +30,7 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		case "settings":
 			m.ov = m.newSettingsOverlay()
 			if m.ov.kind == overlayForm {
-				return m, m.ov.form.Init()
+				return m, dashBlinkTick()
 			}
 			return m, nil
 		case "help":

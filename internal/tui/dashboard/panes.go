@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"fmt"
-	"image/color"
 	"strings"
 	"time"
 
@@ -283,43 +282,22 @@ func (m model) meterLines(provName string, meter config.Meter, w int, compact bo
 	}
 	lines := []string{lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Fg])).Render(b.String())}
 
-	// Cap bar, colored by fill level like btop's meters: green → amber → red.
+	// Animated cap bar, colored by fill level like btop's meters.
 	if meter.Cap > 0 && w > 10 {
 		pct := val / meter.Cap
 		if pct > 1 {
 			pct = 1
 		}
-		barW := w - 6
-		if barW > 40 {
-			barW = 40
-		}
-		var bar progress.Model
-		if theme.IsMono(m.palette) {
-			bar = progress.New(
-				progress.WithColors(lipgloss.Color(m.palette[theme.Fg])),
-				progress.WithWidth(barW),
-				progress.WithoutPercentage(),
-			)
-		} else {
-			bar = progress.New(
-				progress.WithColorFunc(func(total, current float64) color.Color {
-					ratio := current / total
-					switch {
-					case ratio >= 0.85:
-						return lipgloss.Color(m.palette[theme.Err])
-					case ratio >= 0.6:
-						return lipgloss.Color(m.palette[theme.Warn])
-					default:
-						return lipgloss.Color(m.palette[theme.OK])
-					}
-				}),
-				progress.WithWidth(barW),
-				progress.WithoutPercentage(),
-			)
+		key := provName + "/" + meter.Name
+		bar, ok := m.bars[key]
+		if !ok {
+			// Bar not synced yet (first frame): static render at target.
+			bar = progress.New(progress.WithWidth(w-6), progress.WithoutPercentage())
+			bar.SetPercent(pct)
 		}
 		pctTxt := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
 			Render(fmt.Sprintf(" %.0f%%", pct*100))
-		lines = append(lines, "  "+bar.ViewAs(pct)+pctTxt)
+		lines = append(lines, "  "+bar.View()+pctTxt)
 	}
 
 	// Reset line: overdue in red, imminent (<2d) in amber, otherwise muted.

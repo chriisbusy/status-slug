@@ -8,10 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
 
@@ -19,6 +17,7 @@ import (
 	"github.com/chriisbusy/status-slug/internal/secret"
 	"github.com/chriisbusy/status-slug/internal/state"
 	"github.com/chriisbusy/status-slug/internal/theme"
+	"github.com/chriisbusy/status-slug/internal/tui/widgets"
 )
 
 // overlayKind identifies which overlay is open.
@@ -47,11 +46,12 @@ type overlayState struct {
 	action    string     // confirm: action id
 	menuItems []menuItem // menu
 	menuSel   int
-	input     textinput.Model // input
-	inputFor  string          // what the input edits
-	form      *huh.Form       // form
-	formFor   string          // "settings" | "meter-add" | "meter-edit:<name>"
-	vp        viewport.Model  // viewport
+	input     *widgets.TextField       // input
+	inputFor  string                   // what the input edits
+	form      *widgets.Form            // form (settings, meter add/edit)
+	fields    map[string]widgets.Field // form field refs by key
+	formFor   string                   // "settings" | "meter:<provider>:<editName>"
+	vp        viewport.Model           // viewport
 }
 
 // --- overlay key routing ---
@@ -105,33 +105,78 @@ func (m model) overlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// forwardToOverlay routes non-key messages (spinner ticks, window events)
-// to the active overlay component.
+// forwardToOverlay routes non-key messages (blink ticks, mouse) to the
+// active overlay component.
 func (m model) forwardToOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.ov.kind {
 	case overlayForm:
-		f, cmd := m.ov.form.Update(msg)
-		if hf, ok := f.(*huh.Form); ok {
-			m.ov.form = hf
-		}
-		if m.ov.form.State == huh.StateCompleted {
-			return m.completeForm()
-		}
-		if m.ov.form.State == huh.StateAborted {
-			m.ov = overlayState{}
+		switch msg := msg.(type) {
+		case dashBlinkMsg:
+			m.ov.form.Tick()
+			return m, dashBlinkTick()
+		case tea.MouseClickMsg:
+			x, y := m.overlayLocal(msg.X, msg.Y)
+			m.ov.form.HandleClick(x, y, m.overlayFormWidth())
+			if m.ov.form.Done() {
+				return m.completeForm()
+			}
+			return m, nil
+		case tea.MouseWheelMsg:
+			key := "down"
+			if msg.Button == tea.MouseWheelUp {
+				key = "up"
+			}
+			m.ov.form.HandleKey(key)
 			return m, nil
 		}
-		return m, cmd
+		return m, nil
 	case overlayViewport:
 		var cmd tea.Cmd
 		m.ov.vp, cmd = m.ov.vp.Update(msg)
 		return m, cmd
 	case overlayInput:
-		var cmd tea.Cmd
-		m.ov.input, cmd = m.ov.input.Update(msg)
-		return m, cmd
+		if _, ok := msg.(dashBlinkMsg); ok {
+			m.ov.input.Tick()
+			return m, dashBlinkTick()
+		}
+		return m, nil
 	}
 	return m, nil
+}
+
+// dashBlinkMsg drives cursor blink inside dashboard overlays.
+type dashBlinkMsg struct{}
+
+func dashBlinkTick() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return dashBlinkMsg{} })
+}
+
+// overlayFormWidth is the content width of overlay forms.
+func (m model) overlayFormWidth() int {
+	w := 64
+	if m.width > 0 && m.width-10 < w {
+		w = m.width - 10
+	}
+	if w < 36 {
+		w = 36
+	}
+	return w
+}
+
+// overlayLocal converts screen coords to overlay-local coords for the
+// centered form popup.
+func (m model) overlayLocal(x, y int) (int, int) {
+	boxW := m.overlayFormWidth() + 4
+	startX := (m.width - boxW) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	boxH := m.overlayHeight() + 2
+	startY := (m.height - boxH) / 2
+	if startY < 0 {
+		startY = 0
+	}
+	return x - startX - 2, y - startY - 1
 }
 
 // --- confirm ---
@@ -306,7 +351,7 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 		case "settings":
 			m.ov = m.newSettingsOverlay()
 			if m.ov.kind == overlayForm {
-				return m, m.ov.form.Init()
+				return m, dashBlinkTick()
 			}
 		case "theme":
 			return m.cycleTheme(), nil
@@ -364,7 +409,8 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 	case action == "fav.add-known":
 		return m, m.openFavKnownMenu()
 	case action == "fav.add-custom":
-		m.ov = newInputOverlay("custom model id", "fav-custom", "e.g. gpt-5-mini")
+		m.ov = m.newInputOverlay("custom model id", "fav-custom", "e.g. gpt-5-mini")
+		return m, dashBlinkTick()
 	case action == "fav.toggle-probe":
 		if pv, mod := m.selectedFavourite(); mod != nil {
 			if mod.Probe == "chat" {
@@ -474,9 +520,8 @@ func (m model) openFavKnownMenu() tea.Cmd {
 
 // --- text input ---
 
-func newInputOverlay(title, inputFor, placeholder string) overlayState {
-	ti := textinput.New()
-	ti.Placeholder = placeholder
+func (m model) newInputOverlay(title, inputFor, placeholder string) overlayState {
+	ti := widgets.NewText(m.palette, title, placeholder)
 	ti.Focus()
 	return overlayState{kind: overlayInput, title: title, inputFor: inputFor, input: ti}
 }
@@ -488,11 +533,11 @@ func (m model) openSetValueInput() tea.Cmd {
 		m.footer = "select a meter row first (usage pane)"
 		return nil
 	}
-	m.ov = newInputOverlay(
+	m.ov = m.newInputOverlay(
 		fmt.Sprintf("set %s/%s (%s)", entry.provider, entry.meter.Name, entry.meter.Unit),
 		"meter:"+entry.provider+"/"+entry.meter.Name,
 		"current value")
-	return nil
+	return dashBlinkTick()
 }
 
 func (m model) inputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -501,14 +546,13 @@ func (m model) inputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = overlayState{}
 		return m, nil
 	case "enter":
-		val := strings.TrimSpace(m.ov.input.Value())
+		val := strings.TrimSpace(m.ov.input.Value)
 		for_ := m.ov.inputFor
 		m.ov = overlayState{}
 		return m.handleInputSubmit(for_, val)
 	}
-	var cmd tea.Cmd
-	m.ov.input, cmd = m.ov.input.Update(msg)
-	return m, cmd
+	m.ov.input.HandleKey(msg.String())
+	return m, nil
 }
 
 func (m model) handleInputSubmit(inputFor, val string) (tea.Model, tea.Cmd) {
@@ -527,7 +571,7 @@ func (m model) handleInputSubmit(inputFor, val string) (tea.Model, tea.Cmd) {
 		} else {
 			m.footer = fmt.Sprintf("%s/%s = %.4g", provName, meterName, f)
 		}
-		return m, nil
+		return m, m.syncBars()
 	case inputFor == "fav-custom":
 		if val == "" {
 			return m, nil
@@ -558,7 +602,7 @@ func (m model) handleInputSubmit(inputFor, val string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// --- meter form (huh) ---
+// --- meter form (widgets) ---
 
 func (m model) openMeterForm(editName string) tea.Cmd {
 	// Which provider? Selected in status pane, else first enabled.
@@ -571,12 +615,9 @@ func (m model) openMeterForm(editName string) tea.Cmd {
 		return nil
 	}
 
-	var (
-		name, unit, usedStr, capStr string
-		reset                       = "never"
-		resetDay                    string
-	)
+	var name, unit, usedStr, capStr, reset, resetDay string
 	unit = "USD"
+	reset = "never"
 	if editName != "" {
 		for _, mt := range p.Meters {
 			if mt.Name == editName {
@@ -592,14 +633,6 @@ func (m model) openMeterForm(editName string) tea.Cmd {
 			}
 		}
 	}
-
-	resetOptions := []huh.Option[string]{
-		huh.NewOption("never", "never"),
-		huh.NewOption("monthly:<day>", "monthly"),
-		huh.NewOption("weekly:<weekday>", "weekly"),
-		huh.NewOption("date:<YYYY-MM-DD>", "date"),
-	}
-	// Preselect reset kind.
 	resetKind := "never"
 	if k, _, ok := strings.Cut(reset, ":"); ok {
 		resetKind = k
@@ -608,44 +641,47 @@ func (m model) openMeterForm(editName string) tea.Cmd {
 		}
 	}
 
-	form := huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("meter name").Value(&name).
-			Validate(func(s string) error {
-				if strings.TrimSpace(s) == "" {
-					return fmt.Errorf("name required")
-				}
-				return nil
-			}),
-		huh.NewInput().Title("unit").Value(&unit),
-		huh.NewInput().Title("current value (blank = 0)").Value(&usedStr).
-			Validate(optionalFloat),
-		huh.NewInput().Title("cap (blank = uncapped)").Value(&capStr).
-			Validate(optionalFloat),
-		huh.NewSelect[string]().Title("reset").Options(resetOptions...).Value(&resetKind),
-		huh.NewInput().Title("reset argument (day 1-31 / mon..sun / YYYY-MM-DD)").Value(&resetDay),
-	)).WithWidth(60).WithShowHelp(true).WithTheme(theme.HuhTheme(m.palette))
+	nameF := widgets.NewText(m.palette, "meter name", "Energy, Spend, Requests…")
+	nameF.Value = name
+	nameF.Validate = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("name required")
+		}
+		return nil
+	}
+	unitF := widgets.NewText(m.palette, "unit", "USD")
+	unitF.Value = unit
+	usedF := widgets.NewText(m.palette, "current value (blank = 0)", "0")
+	usedF.Value = usedStr
+	usedF.Validate = widgets.OptionalFloat
+	capF := widgets.NewText(m.palette, "cap (blank = no cap)", "1000")
+	capF.Value = capStr
+	capF.Validate = widgets.OptionalFloat
+	resetF := widgets.NewSelect(m.palette, "reset", []string{
+		"never", "monthly:<day>", "weekly:<weekday>", "date:<YYYY-MM-DD>",
+	})
+	resetKeys := []string{"never", "monthly", "weekly", "date"}
+	for i, k := range resetKeys {
+		if k == resetKind {
+			resetF.Selected = i
+		}
+	}
+	argF := widgets.NewText(m.palette, "reset argument", "day 1-31 / mon..sun / YYYY-MM-DD")
+	argF.Value = resetDay
 
 	m.ov = overlayState{
 		kind:    overlayForm,
 		title:   "meter: " + p.Name,
-		form:    form,
+		form:    widgets.NewForm(m.palette, "", "", nameF, unitF, usedF, capF, resetF, argF),
+		fields:  map[string]widgets.Field{"name": nameF, "unit": unitF, "used": usedF, "cap": capF, "reset": resetF, "resetArg": argF},
 		formFor: "meter:" + p.Name + ":" + editName,
 	}
-	// Stash field pointers via closure on the model for completeForm.
-	m.ov.body = "" // unused
-	// We need the pointers at completion time; store them in a package-level
-	// side channel keyed by form pointer is ugly — instead we read values via
-	// huh's GetString with keys. Set keys:
-	// (huh fields take .Key(...); simpler: capture pointers in a closure stored
-	// on the overlay state.)
-	m.ovFields = map[string]*string{
-		"name": &name, "unit": &unit, "used": &usedStr,
-		"cap": &capStr, "resetKind": &resetKind, "resetDay": &resetDay,
-	}
-	return m.ov.form.Init()
+	return dashBlinkTick()
 }
 
 // --- settings form (huh) ---
+
+// --- settings form (widgets) ---
 
 func (m model) newSettingsOverlay() overlayState {
 	s := m.cfg.Settings
@@ -660,45 +696,70 @@ func (m model) newSettingsOverlay() overlayState {
 	}
 	sort.Strings(themeNames)
 
-	themeOpts := make([]huh.Option[string], len(themeNames))
-	for i, n := range themeNames {
-		themeOpts[i] = huh.NewOption(n, n)
+	selectIdx := func(f *widgets.SelectField, options []string, cur string) {
+		for i, o := range options {
+			if o == cur {
+				f.Selected = i
+			}
+		}
 	}
+
+	themeF := widgets.NewSelect(m.palette, "theme", themeNames)
+	if s.Theme == "" {
+		s.Theme = "sstop"
+	}
+	selectIdx(themeF, themeNames, s.Theme)
 
 	viewNames := m.viewCycleOrder()
-	viewOpts := make([]huh.Option[string], len(viewNames))
-	for i, n := range viewNames {
-		viewOpts[i] = huh.NewOption(n, n)
-	}
+	viewF := widgets.NewSelect(m.palette, "view", viewNames)
+	selectIdx(viewF, viewNames, m.activeViewDef().Name)
 
-	splitOpts := []huh.Option[string]{}
+	arrF := widgets.NewSelect(m.palette, "arrangement", []string{"grid", "stack"})
+	selectIdx(arrF, []string{"grid", "stack"}, m.activeViewDef().Arrangement)
+
+	compactF := widgets.NewConfirm(m.palette, "compact density", m.activeViewDef().Compact)
+
+	var splitOpts []string
 	for pct := 40; pct <= 80; pct += 5 {
-		splitOpts = append(splitOpts, huh.NewOption(fmt.Sprintf("%d%%", pct), strconv.Itoa(pct)))
+		splitOpts = append(splitOpts, fmt.Sprintf("%d%%", pct))
 	}
-	curSplit := strconv.Itoa(int(s2split(m.activeViewDef().MainSplit) * 100))
+	splitF := widgets.NewSelect(m.palette, "main split", splitOpts)
+	selectIdx(splitF, splitOpts, fmt.Sprintf("%d%%", int(s2split(m.activeViewDef().MainSplit)*100)))
 
-	var (
-		themeSel   = s.Theme
-		viewSel    = m.activeViewDef().Name
-		arrSel     = m.activeViewDef().Arrangement
-		compactSel = m.activeViewDef().Compact
-		splitSel   = curSplit
-		borderSel  = s.BorderStyle
-		glyphSel   = s.GraphGlyphs
-		timeoutIn  = strconv.Itoa(s.ProbeTimeout)
-		refreshSel = strconv.Itoa(s.AutoRefresh)
-		modeSel    = s.ProbeMode
-		histIn     = strconv.Itoa(s.HistoryLength)
-		keysSel    = s.KeysSource
-		nerdSel    = s.NerdFont
-		quitSel    = s.ConfirmQuit
-		launchSel  = s.CheckOnLaunch
-		bellSel    = s.AlertBell
-		bgSel      = s.ThemeBackground
-	)
-	if themeSel == "" {
-		themeSel = "sstop"
+	borderF := widgets.NewSelect(m.palette, "border style", []string{"rounded", "square", "thick"})
+	selectIdx(borderF, []string{"rounded", "square", "thick"}, s.BorderStyle)
+
+	glyphF := widgets.NewSelect(m.palette, "graph glyphs", []string{"braille", "blocks", "ascii"})
+	selectIdx(glyphF, []string{"braille", "blocks", "ascii"}, s.GraphGlyphs)
+
+	bgF := widgets.NewConfirm(m.palette, "paint theme background", s.ThemeBackground)
+
+	timeoutF := widgets.NewText(m.palette, "probe timeout (5-30s)", "10")
+	timeoutF.Value = strconv.Itoa(s.ProbeTimeout)
+	timeoutF.Validate = intRange(5, 30)
+
+	refreshF := widgets.NewSelect(m.palette, "auto refresh", []string{"off", "30s", "60s", "300s"})
+	refreshKeys := []string{"0", "30", "60", "300"}
+	for i, k := range refreshKeys {
+		if k == strconv.Itoa(s.AutoRefresh) {
+			refreshF.Selected = i
+		}
 	}
+
+	modeF := widgets.NewSelect(m.palette, "probe mode", []string{"models", "chat"})
+	selectIdx(modeF, []string{"models", "chat"}, s.ProbeMode)
+
+	histF := widgets.NewText(m.palette, "history length (20-240)", "60")
+	histF.Value = strconv.Itoa(s.HistoryLength)
+	histF.Validate = intRange(20, 240)
+
+	keysF := widgets.NewSelect(m.palette, "keys source", []string{"auto", "keyring", "file", "env"})
+	selectIdx(keysF, []string{"auto", "keyring", "file", "env"}, s.KeysSource)
+
+	nerdF := widgets.NewConfirm(m.palette, "nerd font glyphs", s.NerdFont)
+	quitF := widgets.NewConfirm(m.palette, "confirm quit", s.ConfirmQuit)
+	launchF := widgets.NewConfirm(m.palette, "check on launch", s.CheckOnLaunch)
+	bellF := widgets.NewConfirm(m.palette, "alert bell on down", s.AlertBell)
 
 	panelToggles := map[string]bool{}
 	for _, n := range panelNames {
@@ -707,71 +768,35 @@ func (m model) newSettingsOverlay() overlayState {
 	for _, n := range m.activeViewDef().Panels {
 		panelToggles[n] = true
 	}
+	pStatusF := widgets.NewConfirm(m.palette, "panel: status", panelToggles["status"])
+	pUsageF := widgets.NewConfirm(m.palette, "panel: usage", panelToggles["usage"])
+	pFavF := widgets.NewConfirm(m.palette, "panel: favourites", panelToggles["favourites"])
+	pStatsF := widgets.NewConfirm(m.palette, "panel: stats", panelToggles["stats"])
 
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().Title("theme").Options(themeOpts...).Value(&themeSel),
-			huh.NewSelect[string]().Title("view").Options(viewOpts...).Value(&viewSel),
-			huh.NewSelect[string]().Title("arrangement").Options(
-				huh.NewOption("grid", "grid"), huh.NewOption("stack", "stack")).Value(&arrSel),
-			huh.NewConfirm().Title("compact density").Value(&compactSel),
-			huh.NewSelect[string]().Title("main split").Options(splitOpts...).Value(&splitSel),
-			huh.NewSelect[string]().Title("border style").Options(
-				huh.NewOption("rounded", "rounded"), huh.NewOption("square", "square"),
-				huh.NewOption("thick", "thick")).Value(&borderSel),
-			huh.NewSelect[string]().Title("graph glyphs").Options(
-				huh.NewOption("braille", "braille"), huh.NewOption("blocks", "blocks"),
-				huh.NewOption("ascii", "ascii")).Value(&glyphSel),
-			huh.NewConfirm().Title("paint theme background").Value(&bgSel),
-		).Title("appearance — theme, layout, chrome"),
-		huh.NewGroup(
-			huh.NewInput().Title("probe timeout (5-30s)").Value(&timeoutIn).
-				Validate(intRange(5, 30)),
-			huh.NewSelect[string]().Title("auto refresh").Options(
-				huh.NewOption("off", "0"), huh.NewOption("30s", "30"),
-				huh.NewOption("60s", "60"), huh.NewOption("300s", "300")).Value(&refreshSel),
-			huh.NewSelect[string]().Title("probe mode").Options(
-				huh.NewOption("models", "models"), huh.NewOption("chat", "chat")).Value(&modeSel),
-			huh.NewInput().Title("history length (20-240)").Value(&histIn).
-				Validate(intRange(20, 240)),
-			huh.NewSelect[string]().Title("keys source").Options(
-				huh.NewOption("auto", "auto"), huh.NewOption("keyring", "keyring"),
-				huh.NewOption("file", "file"), huh.NewOption("env", "env")).Value(&keysSel),
-		).Title("probing — timeouts, refresh, storage"),
-		huh.NewGroup(
-			huh.NewConfirm().Title("nerd font glyphs").Value(&nerdSel),
-			huh.NewConfirm().Title("confirm quit").Value(&quitSel),
-			huh.NewConfirm().Title("check on launch").Value(&launchSel),
-			huh.NewConfirm().Title("alert bell on down").Value(&bellSel),
-			huh.NewConfirm().Title("panel: status").Value(mapBool(panelToggles, "status")),
-			huh.NewConfirm().Title("panel: usage").Value(mapBool(panelToggles, "usage")),
-			huh.NewConfirm().Title("panel: favourites").Value(mapBool(panelToggles, "favourites")),
-			huh.NewConfirm().Title("panel: stats").Value(mapBool(panelToggles, "stats")),
-		).Title("behavior & panels"),
-	).WithWidth(64).WithTheme(theme.HuhTheme(m.palette))
+	fields := []widgets.Field{
+		widgets.NewNote(m.palette, "appearance", "theme, layout, chrome"),
+		themeF, viewF, arrF, compactF, splitF, borderF, glyphF, bgF,
+		widgets.NewNote(m.palette, "probing", "timeouts, refresh, key storage"),
+		timeoutF, refreshF, modeF, histF, keysF,
+		widgets.NewNote(m.palette, "behavior & panels", "toggles and pane visibility"),
+		nerdF, quitF, launchF, bellF, pStatusF, pUsageF, pFavF, pStatsF,
+	}
 
-	ov := overlayState{
-		kind:    overlayForm,
-		title:   "settings",
-		form:    form,
+	return overlayState{
+		kind:  overlayForm,
+		title: "settings",
+		form:  widgets.NewForm(m.palette, "", "", fields...),
+		fields: map[string]widgets.Field{
+			"theme": themeF, "view": viewF, "arrangement": arrF, "compact": compactF,
+			"split": splitF, "border": borderF, "glyphs": glyphF, "themeBackground": bgF,
+			"timeout": timeoutF, "refresh": refreshF, "mode": modeF, "history": histF,
+			"keys": keysF, "nerd": nerdF, "confirmQuit": quitF, "checkOnLaunch": launchF,
+			"alertBell":    bellF,
+			"panel:status": pStatusF, "panel:usage": pUsageF,
+			"panel:favourites": pFavF, "panel:stats": pStatsF,
+		},
 		formFor: "settings",
 	}
-	m.ovFields = map[string]*string{
-		"theme": &themeSel, "view": &viewSel, "arrangement": &arrSel,
-		"split": &splitSel, "border": &borderSel, "glyphs": &glyphSel,
-		"timeout": &timeoutIn, "refresh": &refreshSel, "mode": &modeSel,
-		"history": &histIn, "keys": &keysSel,
-	}
-	m.ovBoolFields = map[string]*bool{
-		"compact": &compactSel, "nerd": &nerdSel, "confirmQuit": &quitSel,
-		"checkOnLaunch": &launchSel, "alertBell": &bellSel, "themeBackground": &bgSel,
-		"panel:status":     mapBool(panelToggles, "status"),
-		"panel:usage":      mapBool(panelToggles, "usage"),
-		"panel:favourites": mapBool(panelToggles, "favourites"),
-		"panel:stats":      mapBool(panelToggles, "stats"),
-	}
-	m.ov = ov
-	return m.ov
 }
 
 func s2split(f float64) float64 {
@@ -779,11 +804,6 @@ func s2split(f float64) float64 {
 		return 0.66
 	}
 	return f
-}
-
-func mapBool(m map[string]bool, k string) *bool {
-	v := m[k]
-	return &v
 }
 
 func intRange(lo, hi int) func(string) error {
@@ -801,33 +821,48 @@ func (m model) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = overlayState{}
 		return m, nil
 	}
-	f, cmd := m.ov.form.Update(msg)
-	if hf, ok := f.(*huh.Form); ok {
-		m.ov.form = hf
-	}
-	if m.ov.form.State == huh.StateCompleted {
+	if m.ov.form.HandleKey(msg.String()) {
 		return m.completeForm()
 	}
-	if m.ov.form.State == huh.StateAborted {
-		m.ov = overlayState{}
-		return m, nil
-	}
-	return m, cmd
+	return m, nil
 }
 
-// completeForm applies a completed huh form.
+// fieldVal reads a widget field's current value by kind.
+func fieldVal(f widgets.Field) string {
+	switch f := f.(type) {
+	case *widgets.TextField:
+		return f.Value
+	case *widgets.SelectField:
+		return f.Value()
+	case *widgets.ConfirmField:
+		if f.Value {
+			return "true"
+		}
+		return "false"
+	}
+	return ""
+}
+
+func fieldBool(f widgets.Field) bool {
+	if cf, ok := f.(*widgets.ConfirmField); ok {
+		return cf.Value
+	}
+	return fieldVal(f) == "true"
+}
+
+// completeForm applies a completed widgets form.
 func (m model) completeForm() (tea.Model, tea.Cmd) {
+	get := func(k string) string { return fieldVal(m.ov.fields[k]) }
+	getb := func(k string) bool { return fieldBool(m.ov.fields[k]) }
+
 	switch {
 	case m.ov.formFor == "settings":
 		s := &m.cfg.Settings
-		get := func(k string) string { return *m.ovFields[k] }
-		getb := func(k string) bool { return *m.ovBoolFields[k] }
-
 		s.Theme = get("theme")
 		s.BorderStyle = get("border")
 		s.GraphGlyphs = get("glyphs")
 		s.ProbeTimeout, _ = strconv.Atoi(get("timeout"))
-		s.AutoRefresh, _ = strconv.Atoi(get("refresh"))
+		s.AutoRefresh, _ = strconv.Atoi(map[string]string{"off": "0", "30s": "30", "60s": "60", "300s": "300"}[get("refresh")])
 		s.ProbeMode = get("mode")
 		s.HistoryLength, _ = strconv.Atoi(get("history"))
 		s.KeysSource = get("keys")
@@ -843,7 +878,6 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		if v.Name != viewName {
 			m.st.UI.View = viewName
 		} else {
-			// Edit panels/arrangement/compact/split on the active view.
 			var panels []string
 			for _, n := range panelNames {
 				if getb("panel:" + n) {
@@ -855,7 +889,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 			}
 			v.Arrangement = get("arrangement")
 			v.Compact = getb("compact")
-			if pct, err := strconv.Atoi(get("split")); err == nil {
+			if pct, err := strconv.Atoi(strings.TrimSuffix(get("split"), "%")); err == nil {
 				v.MainSplit = float64(pct) / 100
 			}
 			m.upsertUserView(v)
@@ -883,7 +917,6 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 			m.footer = "provider gone"
 			break
 		}
-		get := func(k string) string { return *m.ovFields[k] }
 		meter := config.Meter{
 			Name: strings.TrimSpace(get("name")),
 			Unit: strings.TrimSpace(get("unit")),
@@ -891,8 +924,8 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		}
 		meter.Used, _ = strconv.ParseFloat(strings.TrimSpace(get("used")), 64)
 		meter.Cap, _ = strconv.ParseFloat(strings.TrimSpace(get("cap")), 64)
-		rk := get("resetKind")
-		rd := strings.TrimSpace(get("resetDay"))
+		rk := get("reset")
+		rd := strings.TrimSpace(get("resetArg"))
 		switch rk {
 		case "monthly", "weekly", "date":
 			if rd == "" {
@@ -918,8 +951,6 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		}
 	}
 	m.ov = overlayState{}
-	m.ovFields = nil
-	m.ovBoolFields = nil
 	return m, nil
 }
 
@@ -1072,11 +1103,11 @@ func (m model) renderOverlay(base string) string {
 			Render("\nj/k navigate · enter select · esc close"))
 		content = b.String()
 	case overlayInput:
-		content = m.ov.input.View() + "\n\n" +
+		content = m.ov.input.View(m.overlayFormWidth()) + "\n\n" +
 			lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
 				Render("enter submit · esc cancel")
 	case overlayForm:
-		content = m.ov.form.View()
+		content = m.ov.form.View(m.overlayFormWidth(), m.overlayHeight()-2)
 	}
 
 	title := ""
@@ -1107,7 +1138,8 @@ const helpMarkdown = `# sslug keys
 | p | cycle view presets |
 | e | cycle themes (live) |
 | o | settings |
-| a | add provider (exits to wizard) |
+| a | add provider |
+| r | edit provider (wizard popup) |
 | d | remove selected provider |
 | z | zoom pane |
 | ? | this help |

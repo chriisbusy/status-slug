@@ -209,17 +209,70 @@ var builtinDracula = Palette{
 	KeyHint:        "#6272A4",
 }
 
+// latte is the light-terminal theme (Catppuccin Latte family) — the only
+// builtin designed for light backgrounds.
+var builtinLatte = Palette{
+	Bg:             "#EFF1F5",
+	Fg:             "#4C4F69",
+	Muted:          "#9CA0B0",
+	Title:          "#4C4F69",
+	Accent:         "#1E66F5",
+	BoxBorder:      "#BCC0CC",
+	BoxBorderFocus: "#1E66F5",
+	OK:             "#40A02B",
+	Warn:           "#DF8E1D",
+	Err:            "#D20F39",
+	Unknown:        "#9CA0B0",
+	BarFill:        "#1E66F5",
+	BarEmpty:       "#BCC0CC",
+	SparkLo:        "#BCC0CC",
+	SparkHi:        "#40A02B",
+	GradLo:         "#1E66F5",
+	GradHi:         "#8839EF",
+	SelectedBg:     "#CCD0DA",
+	SelectedFg:     "#4C4F69",
+	KeyHint:        "#9CA0B0",
+}
+
+// tokyonight: deep blue/cyan family with violet gradient.
+var builtinTokyoNight = Palette{
+	Bg:             "#1A1B26",
+	Fg:             "#C0CAF5",
+	Muted:          "#565F89",
+	Title:          "#C0CAF5",
+	Accent:         "#7AA2F7",
+	BoxBorder:      "#292E42",
+	BoxBorderFocus: "#7AA2F7",
+	OK:             "#9ECE6A",
+	Warn:           "#E0AF68",
+	Err:            "#F7768E",
+	Unknown:        "#565F89",
+	BarFill:        "#7AA2F7",
+	BarEmpty:       "#292E42",
+	SparkLo:        "#292E42",
+	SparkHi:        "#9ECE6A",
+	GradLo:         "#7AA2F7",
+	GradHi:         "#BB9AF7",
+	SelectedBg:     "#283457",
+	SelectedFg:     "#C0CAF5",
+	KeyHint:        "#565F89",
+}
+
 var builtins = map[string]Palette{
-	"sstop":   builtinSstop,
-	"mocha":   builtinMocha,
-	"nord":    builtinNord,
-	"gruvbox": builtinGruvbox,
-	"dracula": builtinDracula,
-	"mono":    builtinMono,
+	"sstop":      builtinSstop,
+	"mocha":      builtinMocha,
+	"nord":       builtinNord,
+	"gruvbox":    builtinGruvbox,
+	"dracula":    builtinDracula,
+	"tokyonight": builtinTokyoNight,
+	"latte":      builtinLatte,
+	"mono":       builtinMono,
 }
 
 // BuiltinNames returns the sorted builtin theme names.
-func BuiltinNames() []string { return []string{"sstop", "mocha", "nord", "gruvbox", "dracula", "mono"} }
+func BuiltinNames() []string {
+	return []string{"sstop", "mocha", "nord", "gruvbox", "dracula", "tokyonight", "latte", "mono"}
+}
 
 // Load resolves a theme name to a palette.
 // name may be a builtin or the stem of a file in themesDir.

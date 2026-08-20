@@ -91,7 +91,7 @@ func TestNOColorForcedMono(t *testing.T) {
 
 func TestBuiltinNames(t *testing.T) {
 	names := theme.BuiltinNames()
-	if len(names) != 6 {
+	if len(names) != 8 {
 		t.Errorf("builtin names: %v", names)
 	}
 }

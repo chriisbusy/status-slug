@@ -1,23 +1,21 @@
+// Package wizard implements the branded setup flow as one embeddable
+// bubbletea model, built on the internal widgets kit (mouse-native,
+// blinking cursor, palette-exact) — no huh dependency.
 package wizard
-
-// wizard.go — the setup wizard as one branded bubbletea program.
-// huh forms are embedded per step; the brand header, step indicator, and
-// context copy stay on screen the whole time. No stock full-screen flashes.
 
 import (
 	"fmt"
 	"os"
-	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/chriisbusy/status-slug/internal/check"
 	"github.com/chriisbusy/status-slug/internal/config"
-	"github.com/chriisbusy/status-slug/internal/provider"
 	"github.com/chriisbusy/status-slug/internal/theme"
+	"github.com/chriisbusy/status-slug/internal/tui/widgets"
 )
 
 // step identifies wizard stages.
@@ -25,9 +23,10 @@ type step int
 
 const (
 	stepIdentity step = iota
-	stepKey
-	stepValidate // spinner + result
-	stepModels   // spinner fetch → multiselect
+	stepKeySource
+	stepKeyDetail
+	stepValidate
+	stepModels
 	stepMeters
 	stepMeterForm
 	stepSummary
@@ -38,20 +37,20 @@ const (
 
 var stepNames = []string{"provider", "key", "verify", "models", "meters", "review"}
 
-// wizardData carries answers across steps. Form fields bind directly to
-// these so a resize can rebuild the current form without losing input.
+// wizardData carries answers across steps; heap-shared so model copies
+// always read the same state (the value-copy trap that ate keystrokes).
 type wizardData struct {
 	name, label, kind, baseURL string
 	keyRef, keyMaterial        string
+	note                       string
 	validation                 check.Result
 	discovered                 []string
 	fetchErr                   string
 	models                     []config.Model
 	meters                     []config.Meter
 	attachCredits              bool
-	providerCount              int // providers already in config
+	providerCount              int
 
-	// Live form field state (bound by huh fields).
 	presetSel      string
 	keySrc         string
 	pastedKey      string
@@ -72,24 +71,34 @@ type meterDraft struct {
 	name, unit, used, cap, resetKind, resetArg string
 }
 
-// Model is the wizard tea model — embeddable as a dashboard popup or
-// runnable standalone via Run.
+// Model is the wizard — embeddable as a dashboard popup or standalone.
 type Model struct {
 	cfg         config.Config
 	palette     theme.Palette
 	data        *wizardData
 	step        step
-	gotoStep    step // set by pendingDone; stepCompleted dispatches on it
-	form        *huh.Form
+	gotoStep    step
+	form        *widgets.Form
+	harvest     func() // syncs field values into data (called on every input)
+	pendingDone func() // transition logic on form completion
 	width       int
 	height      int
 	spin        spinner.Model
 	err         error
 	reconfigure string
-	pendingDone func()
 }
 
-// New builds the wizard for embedding (dashboard popup) or standalone run.
+// WizardInfo exposes read-only progress info for embedding hosts and tests.
+type WizardInfo struct {
+	Name, Label, Kind, BaseURL string
+}
+
+// Info returns the wizard's in-flight answers (read-only).
+func (m Model) Info() WizardInfo {
+	return WizardInfo{Name: m.data.name, Label: m.data.label, Kind: m.data.kind, BaseURL: m.data.baseURL}
+}
+
+// New builds the wizard for embedding or standalone run.
 func New(cfg config.Config, reconfigure string) Model {
 	palette, _ := theme.LoadFromSettings(cfg.Settings)
 	m := Model{
@@ -101,28 +110,21 @@ func New(cfg config.Config, reconfigure string) Model {
 	}
 	m.spin = spinner.New(spinner.WithSpinner(spinner.Line),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color(palette[theme.Accent]))))
-	m.enterIdentity()
-	m.gotoStep = stepKey
-	return m
-}
-
-// StepName returns the current step's display name for the popup title.
-func (m Model) StepName() string {
-	i := int(m.step)
-	if i < 0 || i >= len(stepNames) {
-		return ""
+	if reconfigure != "" {
+		if existing := cfg.Find(reconfigure); existing != nil {
+			m.data.name = existing.Name
+			m.data.label = existing.Label
+			m.data.kind = existing.Kind
+			m.data.baseURL = existing.BaseURL
+			m.data.keyRef = existing.KeyRef
+			m.data.models = existing.Models
+			m.data.meters = existing.Meters
+			m.data.note = existing.Note
+		}
 	}
-	return stepNames[i]
-}
-
-// WizardInfo exposes read-only progress info for embedding hosts and tests.
-type WizardInfo struct {
-	Name, Label, Kind, BaseURL string
-}
-
-// Info returns the wizard's in-flight answers (read-only).
-func (m Model) Info() WizardInfo {
-	return WizardInfo{Name: m.data.name, Label: m.data.label, Kind: m.data.kind, BaseURL: m.data.baseURL}
+	m.enterIdentity()
+	m.gotoStep = stepKeySource
+	return m
 }
 
 // Config returns the wizard's updated config.
@@ -137,46 +139,191 @@ func (m Model) IsAborted() bool { return m.step == stepAborted || m.err != nil }
 // Err returns the terminal error, if any.
 func (m Model) Err() error { return m.err }
 
-// Content renders the wizard as an embeddable string (no alt screen).
-func (m Model) Content() string {
-	return m.header() + "\n" + m.body()
-}
-
-// body renders the current step's interactive region.
-func (m Model) body() string {
-	switch m.step {
-	case stepValidate:
-		if m.form != nil {
-			return m.form.View()
-		}
-		return m.spin.View() + " verifying key against " + m.data.baseURL + "…"
-	case stepModels:
-		if m.form != nil {
-			return m.form.View()
-		}
-		return m.spin.View() + " discovering models…"
-	case stepDone:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).
-			Render("saved.")
-	case stepAborted:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
-			Render("setup aborted — nothing was saved.")
-	default:
-		if m.form != nil {
-			return m.form.View()
-		}
+// StepName returns the current step's display name for the popup title.
+func (m Model) StepName() string {
+	i := int(m.step)
+	switch {
+	case m.step == stepKeyDetail:
+		i = int(stepKeySource)
+	case m.step == stepMeterForm:
+		i = int(stepMeters)
 	}
-	return ""
+	if i < 0 || i >= len(stepNames) {
+		return ""
+	}
+	return stepNames[i]
 }
 
-// rebuildCurrentForm reconstructs the current step's huh form at the new
-// terminal size. Values survive because fields bind to wizardData.
+// blinkMsg drives the cursor blink.
+type blinkMsg struct{}
+
+func blinkTick() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return blinkMsg{} })
+}
+
+func (m Model) Init() tea.Cmd { return blinkTick() }
+
+// UpdateModel is Update with a concrete return type for embedding hosts.
+func (m Model) UpdateModel(msg tea.Msg) (Model, tea.Cmd) {
+	tm, cmd := m.Update(translateMouse(msg))
+	if wm, ok := tm.(Model); ok {
+		return wm, cmd
+	}
+	return m, cmd
+}
+
+// Update implements tea.Model.
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.rebuildCurrentForm()
+		return m, nil
+
+	case blinkMsg:
+		if m.form != nil {
+			m.form.Tick()
+		}
+		return m, blinkTick()
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+
+	case tea.KeyPressMsg:
+		key := msg.String()
+		if key == "ctrl+c" || key == "esc" {
+			m.step = stepAborted
+			return m, tea.Quit
+		}
+		if m.form == nil {
+			return m, nil
+		}
+		if m.form.HandleKey(key) {
+			return m.stepCompleted()
+		}
+		if m.harvest != nil {
+			m.harvest()
+		}
+		return m, nil
+
+	case tea.MouseClickMsg:
+		if m.form == nil {
+			return m, nil
+		}
+		x, y := m.formLocal(msg.X, msg.Y)
+		m.form.HandleClick(x, y, m.formWidth())
+		if m.harvest != nil {
+			m.harvest()
+		}
+		if m.form.Done() {
+			return m.stepCompleted()
+		}
+		return m, nil
+
+	case validateResultMsg:
+		m.data.validation = msg.result
+		return m.afterValidate()
+	case modelsResultMsg:
+		m.data.discovered = msg.ids
+		m.data.fetchErr = msg.errText
+		return m.enterModelsForm()
+	}
+	return m, nil
+}
+
+// formWidth is the content width of the wizard form.
+func (m Model) formWidth() int {
+	w := 72
+	if m.width > 0 && m.width-10 < w {
+		w = m.width - 10
+	}
+	if w < 36 {
+		w = 36
+	}
+	return w
+}
+
+// formHeight is the content height of the wizard form.
+func (m Model) formHeight() int {
+	h := m.height - 12
+	if h < 8 {
+		h = 8
+	}
+	return h
+}
+
+// formLocal converts screen coords to form-local coords (the popup is
+// centered; the dashboard passes raw screen coords through).
+func (m Model) formLocal(x, y int) (int, int) {
+	// The popup box: width = form width + padding 2 + border 2, centered.
+	boxW := m.formWidth() + 4
+	startX := (m.width - boxW) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	// Estimate popup height from form height + header.
+	boxH := m.formHeight() + 9
+	startY := (m.height - boxH) / 2
+	if startY < 0 {
+		startY = 0
+	}
+	return x - startX - 2, y - startY - 1
+}
+
+// stepCompleted runs after a form completes: harvest, transition, dispatch.
+func (m Model) stepCompleted() (tea.Model, tea.Cmd) {
+	if m.harvest != nil {
+		m.harvest()
+	}
+	if m.pendingDone != nil {
+		m.pendingDone()
+		m.pendingDone = nil
+	}
+	if m.err != nil {
+		fmt.Fprintln(os.Stderr, "sslug setup:", m.err)
+		return m, tea.Quit
+	}
+	if m.step == stepAborted {
+		return m, tea.Quit
+	}
+	switch m.gotoStep {
+	case stepKeySource:
+		return m.enterKeySource()
+	case stepKeyDetail:
+		return m.enterKeyDetail()
+	case stepValidate:
+		return m.enterValidate()
+	case stepModels:
+		return m.enterModelsFetch()
+	case stepMeters:
+		return m.enterMeters()
+	case stepMeterForm:
+		return m.enterMeterForm()
+	case stepSummary:
+		return m.enterSummary()
+	case stepAddAnother:
+		return m.enterAddAnother()
+	case stepIdentity:
+		m.enterIdentity()
+		return m, nil
+	case stepDone:
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// rebuildCurrentForm reconstructs the current step's form at the new size.
+// Values survive because harvest() keeps wizardData current.
 func (m *Model) rebuildCurrentForm() {
 	switch m.step {
 	case stepIdentity:
 		m.enterIdentity()
-	case stepKey:
-		m.enterKey()
+	case stepKeySource:
+		m.enterKeySource()
+	case stepKeyDetail:
+		m.enterKeyDetail()
 	case stepModels:
 		if m.form != nil {
 			m.enterModelsForm()
@@ -190,18 +337,10 @@ func (m *Model) rebuildCurrentForm() {
 	case stepAddAnother:
 		m.enterAddAnother()
 	}
-	// stepValidate spinner / in-flight fetches: nothing to rebuild.
 }
 
-func (m Model) Init() tea.Cmd {
-	if m.form != nil {
-		return m.form.Init()
-	}
-	return nil
-}
-
-// translateMouse maps wheel events to arrow keys (huh v2 has no mouse
-// support; wheel-to-arrows is the honest subset).
+// translateMouse maps wheel events to arrow keys (widgets handle real clicks;
+// wheel maps to up/down navigation).
 func translateMouse(msg tea.Msg) tea.Msg {
 	if wh, ok := msg.(tea.MouseWheelMsg); ok {
 		switch wh.Button {
@@ -214,13 +353,83 @@ func translateMouse(msg tea.Msg) tea.Msg {
 	return msg
 }
 
-// UpdateModel is Update with a concrete return type for embedding hosts.
-func (m Model) UpdateModel(msg tea.Msg) (Model, tea.Cmd) {
-	tm, cmd := m.Update(translateMouse(msg))
-	if wm, ok := tm.(Model); ok {
-		return wm, cmd
+// --- async result messages ---
+
+type validateResultMsg struct{ result check.Result }
+type modelsResultMsg struct {
+	ids     []string
+	errText string
+}
+
+// --- header & content ---
+
+func (m Model) header() string {
+	art := theme.Art(m.palette)
+	stepIdx := int(m.step)
+	if m.step == stepKeyDetail {
+		stepIdx = int(stepKeySource)
 	}
-	return m, cmd
+	if m.step == stepMeterForm {
+		stepIdx = int(stepMeters)
+	}
+	if stepIdx > len(stepNames)-1 {
+		stepIdx = len(stepNames) - 1
+	}
+	dots := ""
+	for i, n := range stepNames {
+		mark := "○"
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+		if i < stepIdx {
+			mark = "●"
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK]))
+		} else if i == stepIdx {
+			mark = "◐"
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent]))
+		}
+		dots += style.Render(mark+" "+n) + "  "
+	}
+	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
+		Render("tab next · shift+tab back · enter accept · esc abort · click works too")
+	return art + "\n\n" + dots + "\n" + hint + "\n"
+}
+
+// Content renders the wizard as an embeddable string.
+func (m Model) Content() string {
+	return m.header() + "\n" + m.body()
+}
+
+func (m Model) body() string {
+	switch m.step {
+	case stepValidate:
+		if m.form != nil {
+			return m.form.View(m.formWidth(), m.formHeight())
+		}
+		return m.spin.View() + " verifying key against " + m.data.baseURL + "…"
+	case stepModels:
+		if m.form != nil {
+			return m.form.View(m.formWidth(), m.formHeight())
+		}
+		return m.spin.View() + " discovering models…"
+	case stepDone:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).
+			Render("saved.")
+	case stepAborted:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
+			Render("setup aborted — nothing was saved.")
+	default:
+		if m.form != nil {
+			return m.form.View(m.formWidth(), m.formHeight())
+		}
+	}
+	return ""
+}
+
+// View implements tea.Model for standalone runs.
+func (m Model) View() tea.View {
+	v := tea.NewView(m.Content())
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
 }
 
 // Run executes the wizard standalone, returning the updated config.
@@ -236,272 +445,4 @@ func Run(cfg config.Config, reconfigure string) (config.Config, error) {
 		return final.cfg, final.err
 	}
 	return final.cfg, nil
-}
-
-// --- layout ---
-
-// newForm wraps a group in a themed, size-bounded huh form. The height
-// budget engages huh's internal viewport so long steps scroll instead of
-// clipping (focused field stays visible).
-func (m Model) newForm(groups ...*huh.Group) *huh.Form {
-	w := 76
-	if m.width > 0 && m.width-8 < w {
-		w = m.width - 8
-	}
-	if w < 40 {
-		w = 40
-	}
-	// Header (art 2 + step line + hint + spacing) + popup chrome.
-	h := m.height - 12
-	if h < 10 {
-		h = 10
-	}
-	return huh.NewForm(groups...).
-		WithTheme(theme.HuhTheme(m.palette)).
-		WithWidth(w).
-		WithHeight(h).
-		WithShowHelp(true)
-}
-
-// --- layout ---
-
-func (m Model) header() string {
-	art := theme.Art(m.palette)
-	if art == "" {
-		art = "sslug"
-	}
-	// Step indicator.
-	stepIdx := int(m.step)
-	if stepIdx > len(stepNames)-1 {
-		stepIdx = len(stepNames) - 1
-	}
-	dots := ""
-	for i, n := range stepNames {
-		if m.step == stepDone || m.step == stepAborted {
-			break
-		}
-		mark := "○"
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
-		if i < stepIdx {
-			mark = "●"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK]))
-		} else if i == stepIdx {
-			mark = "◐"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent]))
-		}
-		dots += style.Render(mark+" "+n) + "  "
-	}
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
-		Render("enter next · esc abort")
-	return art + "\n\n" + dots + "\n" + hint + "\n"
-}
-
-// View implements tea.Model for standalone runs.
-func (m Model) View() tea.View {
-	v := tea.NewView(m.Content())
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	return v
-}
-
-// --- update ---
-
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.rebuildCurrentForm()
-		if m.form != nil {
-			return m, m.form.Init()
-		}
-		return m, nil
-	case tea.KeyPressMsg:
-		if msg.String() == "ctrl+c" {
-			m.step = stepAborted
-			return m, tea.Quit
-		}
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spin, cmd = m.spin.Update(msg)
-		if m.step == stepValidate || (m.step == stepModels && m.form == nil) {
-			return m, cmd
-		}
-		return m, cmd
-	case validateResultMsg:
-		m.data.validation = msg.result
-		return m.afterValidate()
-	case modelsResultMsg:
-		m.data.discovered = msg.ids
-		m.data.fetchErr = msg.errText
-		return m.enterModelsForm()
-	}
-	if m.form != nil {
-		f, cmd := m.form.Update(msg)
-		if hf, ok := f.(*huh.Form); ok {
-			m.form = hf
-		}
-		if m.form.State == huh.StateCompleted {
-			return m.stepCompleted()
-		}
-		if m.form.State == huh.StateAborted {
-			m.step = stepAborted
-			return m, tea.Quit
-		}
-		return m, cmd
-	}
-	return m, nil
-}
-
-// stepCompleted advances the state machine after a huh form completes.
-// The step's pendingDone closure (set by the enter* builder) unpacks field
-// values and sets gotoStep; this dispatches to the next enter* function.
-func (m Model) stepCompleted() (tea.Model, tea.Cmd) {
-	if m.pendingDone != nil {
-		m.pendingDone()
-		m.pendingDone = nil
-	}
-	if m.err != nil {
-		fmt.Fprintln(os.Stderr, "sslug setup:", m.err)
-		return m, tea.Quit
-	}
-	if m.step == stepAborted {
-		return m, tea.Quit
-	}
-	switch m.gotoStep {
-	case stepKey:
-		return m.enterKey()
-	case stepValidate:
-		return m.enterValidate()
-	case stepModels:
-		return m.enterModelsFetch()
-	case stepMeters:
-		return m.enterMeters()
-	case stepMeterForm:
-		return m.enterMeterForm()
-	case stepSummary:
-		return m.enterSummary()
-	case stepAddAnother:
-		return m.enterAddAnother()
-	case stepIdentity:
-		m.enterIdentity()
-		return m, m.form.Init()
-	case stepDone:
-		return m, tea.Quit
-	}
-	return m, nil
-}
-
-// --- step: identity ---
-
-func (m *Model) enterIdentity() {
-	d := m.data
-	if m.reconfigure != "" {
-		if existing := m.cfg.Find(m.reconfigure); existing != nil {
-			d.name = existing.Name
-			d.label = existing.Label
-			d.kind = existing.Kind
-			d.baseURL = existing.BaseURL
-		}
-	}
-	if d.label == "" {
-		d.label = "official"
-	}
-
-	presetOpts := make([]huh.Option[string], 0, len(provider.Presets)+1)
-	for _, p := range provider.Presets {
-		presetOpts = append(presetOpts, huh.NewOption(
-			fmt.Sprintf("%-14s %s", p.Name, p.BaseURL), p.Name))
-	}
-	presetOpts = append(presetOpts, huh.NewOption("Custom — your own endpoint", "Custom"))
-
-	presetSel := &d.presetSel
-	*presetSel = "Custom"
-	if d.kind != "" {
-		for _, p := range provider.Presets {
-			if p.Kind == d.kind && p.BaseURL == d.baseURL {
-				*presetSel = p.Name
-			}
-		}
-		if *presetSel == "Custom" && d.kind != "" && d.kind != "custom" {
-			// Kind matches a preset's kind; pick the first as a hint.
-			for _, p := range provider.Presets {
-				if p.Kind == d.kind {
-					*presetSel = p.Name
-					break
-				}
-			}
-		}
-	}
-
-	m.form = m.newForm(
-		huh.NewGroup(
-			huh.NewNote().
-				Title("welcome to sslug").
-				Description("Let's add your first provider. Pick a preset or go fully custom — sslug watches anything that speaks HTTP."),
-			huh.NewInput().
-				Title("What do you call it?").
-				Placeholder("e.g. OpenAI, or Neuralwatt (homelab)").
-				Value(&d.name).
-				Validate(func(s string) error {
-					s = strings.TrimSpace(s)
-					if s == "" {
-						return fmt.Errorf("a name is required")
-					}
-					if m.reconfigure == "" && m.cfg.Find(s) != nil {
-						return fmt.Errorf("%q already exists", s)
-					}
-					return nil
-				}),
-			huh.NewSelect[string]().
-				Title("How is it billed / provided?").
-				Options(
-					huh.NewOption("official — first-party API", "official"),
-					huh.NewOption("third-party — reseller or gateway", "third-party"),
-					huh.NewOption("coding-plan — subscription bundle", "coding-plan"),
-					huh.NewOption("custom — something else entirely", "custom"),
-				).
-				Value(&d.label),
-			huh.NewSelect[string]().
-				Title("Which preset?").
-				Description("Presets fill in the endpoint and auth style. Custom works with any OpenAI-compatible API.").
-				Options(presetOpts...).
-				Value(presetSel),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Base URL").
-				Description("The API root, e.g. https://api.example.com/v1").
-				Placeholder("https://…").
-				Value(&d.baseURL).
-				Validate(func(s string) error {
-					if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
-						return fmt.Errorf("must start with http:// or https://")
-					}
-					return nil
-				}),
-		).WithHideFunc(func() bool { return *presetSel != "Custom" }),
-	)
-	d.name = strings.TrimSpace(d.name)
-	m.onFormDone(func() {
-		if *presetSel == "Custom" {
-			d.kind = "custom"
-		} else if p := provider.FindPreset(*presetSel); p != nil {
-			d.kind = p.Kind
-			d.baseURL = p.BaseURL
-		}
-		m.gotoStep = stepKey
-	})
-}
-
-// onFormDone registers a callback fired when the current form completes.
-// Stored on the model so stepCompleted can invoke it.
-func (m *Model) onFormDone(fn func()) { m.pendingDone = fn }
-
-// --- key step is in wizard_key.go (next file) ---
-
-// validateResultMsg / modelsResultMsg carry async results.
-type validateResultMsg struct{ result check.Result }
-type modelsResultMsg struct {
-	ids     []string
-	errText string
 }

@@ -1,6 +1,6 @@
 package wizard
 
-// steps.go — per-step huh form builders and transitions for the wizard.
+// steps.go — per-step widget form builders for the wizard.
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/chriisbusy/status-slug/internal/check"
@@ -19,157 +18,241 @@ import (
 	"github.com/chriisbusy/status-slug/internal/provider"
 	"github.com/chriisbusy/status-slug/internal/secret"
 	"github.com/chriisbusy/status-slug/internal/theme"
+	"github.com/chriisbusy/status-slug/internal/tui/widgets"
 )
 
-// optionalFloat validates a huh input that may be blank or a float.
-func optionalFloat(s string) error {
-	s = strings.TrimSpace(s)
-	if s == "" {
+// --- step: identity ---
+
+func (m *Model) enterIdentity() {
+	m.step = stepIdentity
+	d := m.data
+	if d.label == "" {
+		d.label = "official"
+	}
+
+	presetOpts := make([]string, 0, len(provider.Presets)+1)
+	for _, p := range provider.Presets {
+		presetOpts = append(presetOpts, p.Name)
+	}
+	presetOpts = append(presetOpts, "Custom")
+
+	nameF := widgets.NewText(m.palette, "what do you call it?", "e.g. OpenAI, or Neuralwatt (homelab)")
+	nameF.Value = d.name
+	nameF.Validate = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("a name is required")
+		}
+		if m.reconfigure == "" && m.cfg.Find(strings.TrimSpace(s)) != nil {
+			return fmt.Errorf("%q already exists", s)
+		}
 		return nil
 	}
-	if _, err := strconv.ParseFloat(s, 64); err != nil {
-		return fmt.Errorf("must be a number")
+
+	labelF := widgets.NewSelect(m.palette, "how is it billed / provided?", []string{
+		"official — first-party api",
+		"third-party — reseller or gateway",
+		"coding-plan — subscription bundle",
+		"custom — something else entirely",
+	})
+	labelKeys := []string{"official", "third-party", "coding-plan", "custom"}
+	for i, k := range labelKeys {
+		if k == d.label {
+			labelF.Selected = i
+		}
 	}
-	return nil
+
+	presetF := widgets.NewSelect(m.palette, "which preset?", presetOpts)
+	presetF.Hint = "presets fill in the endpoint and auth style; custom works with any openai-compatible api"
+	for i, p := range provider.Presets {
+		if p.Kind == d.kind && p.BaseURL == d.baseURL {
+			presetF.Selected = i
+		}
+	}
+	if d.kind == "custom" || (d.baseURL != "" && presetF.Selected == 0 && d.kind == "") {
+		presetF.Selected = len(presetOpts) - 1
+	}
+
+	fields := []widgets.Field{
+		widgets.NewNote(m.palette, "welcome to sslug",
+			"let's add your first provider. pick a preset or go fully custom — sslug watches anything that speaks http."),
+		nameF, labelF, presetF,
+	}
+
+	var urlF *widgets.TextField
+	if presetF.Value() == "Custom" {
+		urlF = widgets.NewText(m.palette, "base url", "https://…")
+		urlF.Value = d.baseURL
+		urlF.Validate = func(s string) error {
+			if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+				return fmt.Errorf("must start with http:// or https://")
+			}
+			return nil
+		}
+		fields = append(fields, urlF)
+	}
+
+	m.form = widgets.NewForm(m.palette, "", "", fields...)
+	m.harvest = func() {
+		d.name = strings.TrimSpace(nameF.Value)
+		d.label = labelKeys[labelF.Selected]
+		d.presetSel = presetF.Value()
+		if urlF != nil {
+			d.baseURL = urlF.Value
+		}
+	}
+	m.pendingDone = func() {
+		if d.presetSel == "Custom" {
+			d.kind = "custom"
+		} else if p := provider.FindPreset(d.presetSel); p != nil {
+			d.kind = p.Kind
+			d.baseURL = p.BaseURL
+		}
+		m.gotoStep = stepKeySource
+	}
 }
 
-// statusColor maps a check status to a palette color.
-func statusColor(pal theme.Palette, status string) string {
-	switch status {
-	case "ok":
-		return pal[theme.OK]
-	case "account":
-		return pal[theme.Warn]
-	case "down":
-		return pal[theme.Err]
-	}
-	return pal[theme.Unknown]
-}
+// --- step: key source ---
 
-// --- step: key ---
-
-func (m *Model) enterKey() (tea.Model, tea.Cmd) {
+func (m *Model) enterKeySource() (tea.Model, tea.Cmd) {
+	m.step = stepKeySource
 	d := m.data
-	m.step = stepKey
 
-	srcOpts := []huh.Option[string]{
-		huh.NewOption("Paste a key — stored in your OS keyring", "paste"),
-		huh.NewOption("Read it from a file…", "locate"),
+	srcOpts := []string{
+		"paste a key — stored in your os keyring",
+		"read it from a file…",
 	}
+	srcKeys := []string{"paste", "locate"}
 	for _, v := range DetectEnvVars(os.Environ()) {
-		srcOpts = append(srcOpts, huh.NewOption("Use $"+v+" (detected in your environment)", "env:"+v))
+		srcOpts = append(srcOpts, "use $"+v+" (detected)")
+		srcKeys = append(srcKeys, "env:"+v)
 	}
-	srcOpts = append(srcOpts, huh.NewOption("No key — local or unauthenticated", "none"))
+	srcOpts = append(srcOpts, "no key — local or unauthenticated")
+	srcKeys = append(srcKeys, "none")
 
-	groups := []*huh.Group{
-		huh.NewGroup(
-			huh.NewNote().
-				Title("the key stays yours").
-				Description("Keys go to your OS keyring and are never printed, logged, or sent anywhere except this provider's API. Read-only probes only."),
-			huh.NewSelect[string]().
-				Title("Where's the key?").
-				Options(srcOpts...).
-				Value(&d.keySrc),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Paste it in").
-				Description("Stored in the OS keyring (service: sslug).").
-				Password(true).
-				Value(&d.pastedKey).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("empty key")
-					}
-					return nil
-				}),
-		).WithHideFunc(func() bool { return d.keySrc != "paste" }),
-		huh.NewGroup(
-			huh.NewFilePicker().
-				Title("Point me at the key file").
-				Description("Its contents become the key; the file itself is left alone.").
-				Value(&d.locatePath),
-		).WithHideFunc(func() bool { return d.keySrc != "locate" }),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("No OS keyring here (headless?). Store it how?").
-				Options(
-					huh.NewOption("0600 file — plaintext at rest, like curl .netrc", "file"),
-					huh.NewOption("Keep it in an env var instead", "env"),
-					huh.NewOption("Abort", "abort"),
-				).
-				Value(&d.fallbackChoice),
-		).WithHideFunc(func() bool {
-			// Only when we have material AND keyring is unusable AND keys_source allows choosing.
-			if d.keySrc != "paste" && d.keySrc != "locate" {
-				return true
-			}
-			ks := m.cfg.Settings.KeysSource
-			if ks == "keyring" || ks == "file" || ks == "env" {
-				return true // destination forced by settings; no dialog
-			}
-			return secret.KeyringAvailable()
-		}),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Which environment variable holds it?").
-				Placeholder("MY_PROVIDER_API_KEY").
-				Value(&d.envName),
-		).WithHideFunc(func() bool { return d.fallbackChoice != "env" }),
-	}
-
-	m.form = m.newForm(groups...)
-	m.onFormDone(func() {
+	srcF := widgets.NewSelect(m.palette, "where's the key?", srcOpts)
+	m.form = widgets.NewForm(m.palette, "", "", []widgets.Field{
+		widgets.NewNote(m.palette, "the key stays yours",
+			"keys go to your os keyring and are never printed, logged, or sent anywhere except this provider's api. read-only probes only."),
+		srcF,
+	}...)
+	m.harvest = func() { d.keySrc = srcKeys[srcF.Selected] }
+	m.pendingDone = func() {
 		switch {
 		case d.keySrc == "none":
 			d.keyRef, d.keyMaterial, _ = KeyRef("none", "", d.name)
-		case d.keySrc == "paste", d.keySrc == "locate":
-			material := d.pastedKey
-			if d.keySrc == "locate" {
-				data, err := os.ReadFile(d.locatePath)
-				if err != nil {
-					m.err = fmt.Errorf("read key file: %w", err)
-					return
-				}
-				material = strings.TrimSpace(string(data))
-				if material == "" {
-					m.err = fmt.Errorf("key file %s is empty", d.locatePath)
-					return
-				}
-			}
-			dest := m.cfg.Settings.KeysSource
-			switch dest {
-			case "keyring", "file":
-				// forced by settings
-			case "env":
-				d.keyRef, _, m.err = KeyRef("env", d.envName, d.name)
-				return
-			default: // auto
-				if secret.KeyringAvailable() {
-					dest = "keyring"
-				} else if d.fallbackChoice == "abort" {
-					m.step = stepAborted
-					return
-				} else if d.fallbackChoice == "env" {
-					d.keyRef, _, m.err = KeyRef("env", d.envName, d.name)
-					return
-				} else {
-					dest = "file"
-				}
-			}
-			d.keyRef, d.keyMaterial, m.err = KeyRef(dest, material, d.name)
+			m.gotoStep = stepModels
 		case strings.HasPrefix(d.keySrc, "env:"):
 			v := strings.TrimPrefix(d.keySrc, "env:")
 			d.keyRef, _, m.err = KeyRef("env", v, d.name)
-		}
-		if m.step != stepAborted {
 			m.gotoStep = stepValidate
+		default:
+			m.gotoStep = stepKeyDetail
 		}
-	})
-	return m, m.form.Init()
+	}
+	return m, nil
 }
 
-// --- step: validate (async probe with spinner) ---
+// --- step: key detail (paste / locate / fallback) ---
+
+func (m *Model) enterKeyDetail() (tea.Model, tea.Cmd) {
+	m.step = stepKeyDetail
+	d := m.data
+
+	// Decide storage destination up front.
+	dest := m.cfg.Settings.KeysSource
+	keyringOK := secret.KeyringAvailable()
+	needFallback := false
+	switch dest {
+	case "keyring":
+		if !keyringOK {
+			m.err = fmt.Errorf("keys_source=keyring but the os keyring is unavailable")
+			return m, tea.Quit
+		}
+	case "file", "env":
+		// forced; no fallback dialog
+	default: // auto
+		if keyringOK {
+			dest = "keyring"
+		} else {
+			needFallback = true
+		}
+	}
+
+	var fields []widgets.Field
+	materialF := widgets.NewText(m.palette, "paste it in", "sk-…")
+	pathF := widgets.NewText(m.palette, "path to the key file", "~/.config/provider/key")
+	fallbackF := widgets.NewSelect(m.palette, "no os keyring here. store it how?", []string{
+		"0600 file — plaintext at rest, like curl .netrc",
+		"keep it in an env var instead",
+		"abort",
+	})
+	envF := widgets.NewText(m.palette, "environment variable name", "MY_PROVIDER_API_KEY")
+
+	switch {
+	case d.keySrc == "paste" && !needFallback && dest != "env":
+		materialF.Password = true
+		fields = []widgets.Field{materialF}
+	case d.keySrc == "paste" && needFallback:
+		materialF.Password = true
+		fields = []widgets.Field{materialF, fallbackF, envF}
+	case d.keySrc == "paste" && dest == "env":
+		materialF.Password = true
+		fields = []widgets.Field{materialF, envF}
+	case d.keySrc == "locate" && !needFallback && dest != "env":
+		fields = []widgets.Field{pathF}
+	case d.keySrc == "locate" && needFallback:
+		fields = []widgets.Field{pathF, fallbackF, envF}
+	case d.keySrc == "locate" && dest == "env":
+		fields = []widgets.Field{pathF, envF}
+	}
+
+	m.form = widgets.NewForm(m.palette, "", "", fields...)
+	m.harvest = func() {
+		d.pastedKey = materialF.Value
+		d.locatePath = pathF.Value
+		d.envName = envF.Value
+		if needFallback {
+			d.fallbackChoice = []string{"file", "env", "abort"}[fallbackF.Selected]
+		}
+	}
+	m.pendingDone = func() {
+		material := d.pastedKey
+		if d.keySrc == "locate" {
+			data, err := os.ReadFile(d.locatePath)
+			if err != nil {
+				m.err = fmt.Errorf("read key file: %w", err)
+				return
+			}
+			material = strings.TrimSpace(string(data))
+			if material == "" {
+				m.err = fmt.Errorf("key file %s is empty", d.locatePath)
+				return
+			}
+		}
+		if needFallback {
+			switch d.fallbackChoice {
+			case "abort":
+				m.step = stepAborted
+				return
+			case "env":
+				d.keyRef, _, m.err = KeyRef("env", d.envName, d.name)
+				m.gotoStep = stepValidate
+				return
+			default:
+				dest = "file"
+			}
+		}
+		if dest == "env" {
+			d.keyRef, _, m.err = KeyRef("env", d.envName, d.name)
+		} else {
+			d.keyRef, d.keyMaterial, m.err = KeyRef(dest, material, d.name)
+		}
+		m.gotoStep = stepValidate
+	}
+	return m, nil
+}
+
+// --- step: validate (async probe) ---
 
 func (m *Model) enterValidate() (tea.Model, tea.Cmd) {
 	if m.err != nil {
@@ -178,9 +261,9 @@ func (m *Model) enterValidate() (tea.Model, tea.Cmd) {
 	m.step = stepValidate
 	d := m.data
 	if d.keyRef == "" || d.keyRef == "none" || d.baseURL == "" {
-		// Nothing to validate against.
 		return m.enterModelsFetch()
 	}
+	m.form = nil
 	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
 		key, _ := secret.Resolve(d.keyRef)
 		if key == "" {
@@ -200,48 +283,54 @@ func (m *Model) afterValidate() (tea.Model, tea.Cmd) {
 		m.gotoStep = stepModels
 		return m.enterModelsFetch()
 	}
-	// Not ok: offer choices.
-	status := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor(m.palette, string(d.validation.Status)))).
-		Render(string(d.validation.Status))
-	opts := []huh.Option[string]{
-		huh.NewOption("Save anyway — I'll fix it later", "save"),
-		huh.NewOption("Re-enter the key", "retry"),
-		huh.NewOption("Abort setup", "abort"),
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor(m.palette, string(d.validation.Status))))
+	choiceF := widgets.NewSelect(m.palette, "what now?", []string{
+		"save anyway — i'll fix it later",
+		"re-enter the key",
+		"abort setup",
+	})
+	m.form = widgets.NewForm(m.palette, "", "", []widgets.Field{
+		widgets.NewNote(m.palette, "probe came back "+statusStyle.Render(string(d.validation.Status)), d.validation.Reason),
+		choiceF,
+	}...)
+	m.harvest = func() {
+		d.validateChoice = []string{"save", "retry", "abort"}[choiceF.Selected]
 	}
-	m.form = m.newForm(huh.NewGroup(
-		huh.NewNote().
-			Title("probe came back "+status).
-			Description(d.validation.Reason),
-		huh.NewSelect[string]().
-			Title("What now?").
-			Options(opts...).
-			Value(&d.validateChoice),
-	))
-	m.step = stepValidate
-	m.onFormDone(func() {
+	m.pendingDone = func() {
 		switch d.validateChoice {
 		case "retry":
 			d.keyRef, d.keyMaterial = "", ""
-			m.gotoStep = stepKey
+			m.gotoStep = stepKeySource
 		case "abort":
 			m.step = stepAborted
 		default:
 			m.gotoStep = stepModels
 		}
-	})
-	return m, m.form.Init()
+	}
+	return m, nil
 }
 
-// --- step: models (async fetch → multiselect) ---
+func statusColor(pal theme.Palette, status string) string {
+	switch status {
+	case "ok":
+		return pal[theme.OK]
+	case "account":
+		return pal[theme.Warn]
+	case "down":
+		return pal[theme.Err]
+	}
+	return pal[theme.Unknown]
+}
+
+// --- step: models ---
 
 func (m *Model) enterModelsFetch() (tea.Model, tea.Cmd) {
 	m.step = stepModels
 	d := m.data
 	if d.baseURL == "" {
-		// No endpoint — skip fetch, manual entry only.
 		return m.enterModelsForm()
 	}
-	m.form = nil // spinner view while fetching
+	m.form = nil
 	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
 		key, _ := secret.Resolve(d.keyRef)
 		if key == "" {
@@ -262,51 +351,39 @@ func (m *Model) enterModelsForm() (tea.Model, tea.Cmd) {
 	d := m.data
 	m.step = stepModels
 
-	var note *huh.Note
-	if d.fetchErr != "" {
-		note = huh.NewNote().
-			Title("couldn't fetch the model list").
-			Description("Add model IDs by hand below — or finish now and the dashboard can fetch them later.")
-	} else if len(d.discovered) == 0 {
-		note = huh.NewNote().
-			Title("no models discovered").
-			Description("Add IDs by hand below, or finish and pick them later.")
-	} else {
-		note = huh.NewNote().
-			Title(fmt.Sprintf("%d models found", len(d.discovered))).
-			Description("Space to mark favourites — they get latency probes and their own cockpit pane.")
+	var note *widgets.Note
+	switch {
+	case d.fetchErr != "":
+		note = widgets.NewNote(m.palette, "couldn't fetch the model list",
+			"add model ids by hand below — or finish now and the dashboard can fetch them later.")
+	case len(d.discovered) == 0:
+		note = widgets.NewNote(m.palette, "no models discovered",
+			"add ids by hand below, or finish and pick them later.")
+	default:
+		note = widgets.NewNote(m.palette, fmt.Sprintf("%d models found", len(d.discovered)),
+			"space toggles — favourites get latency probes and their own cockpit pane.")
 	}
 
-	groups := []*huh.Group{}
+	multiF := widgets.NewMulti(m.palette, "favourites", d.discovered)
+	customF := widgets.NewText(m.palette, "any other model id? (blank to skip)", "e.g. neuralwatt-large-v3")
+	customF.Value = d.customModel
+
+	fields := []widgets.Field{note}
 	if len(d.discovered) > 0 {
-		opts := make([]huh.Option[string], len(d.discovered))
-		for i, id := range d.discovered {
-			opts[i] = huh.NewOption(id, id)
-		}
-		groups = append(groups, huh.NewGroup(
-			note,
-			huh.NewMultiSelect[string]().
-				Title("Favourites").
-				Options(opts...).
-				Value(&d.selectedModels),
-		))
-	} else {
-		groups = append(groups, huh.NewGroup(note))
+		fields = append(fields, multiF)
 	}
-	groups = append(groups, huh.NewGroup(
-		huh.NewInput().
-			Title("Any other model ID? (blank to skip)").
-			Placeholder("e.g. neuralwatt-large-v3").
-			Value(&d.customModel),
-	))
+	fields = append(fields, customF)
 
-	m.form = m.newForm(groups...)
-	m.onFormDone(func() {
+	m.form = widgets.NewForm(m.palette, "", "", fields...)
+	m.harvest = func() {
+		d.selectedModels = multiF.Values()
+		d.customModel = strings.TrimSpace(customF.Value)
+	}
+	m.pendingDone = func() {
 		customList := []string{}
-		if strings.TrimSpace(d.customModel) != "" {
-			customList = []string{strings.TrimSpace(d.customModel)}
+		if d.customModel != "" {
+			customList = []string{d.customModel}
 		}
-		// Mark selected as favourites.
 		var existing []config.Model
 		if p := m.cfg.Find(d.name); p != nil {
 			existing = p.Models
@@ -320,8 +397,8 @@ func (m *Model) enterModelsForm() (tea.Model, tea.Cmd) {
 			}
 		}
 		m.gotoStep = stepMeters
-	})
-	return m, m.form.Init()
+	}
+	return m, nil
 }
 
 // --- step: meters ---
@@ -331,31 +408,29 @@ func (m *Model) enterMeters() (tea.Model, tea.Cmd) {
 	d := m.data
 	d.addMeter = false
 
-	isOpenRouter := strings.Contains(m.data.baseURL, "openrouter.ai")
-
-	groups := []*huh.Group{
-		huh.NewGroup(
-			huh.NewNote().
-				Title("usage meters — track anything").
-				Description("Energy, spend, requests, credits — any unit, with a cap and a reset cycle. Update them from scripts with `sslug usage set`. Skip freely: the dashboard shows probes either way."),
-			huh.NewConfirm().
-				Title("Add a usage meter?").
-				Value(&d.addMeter),
-		),
+	addF := widgets.NewConfirm(m.palette, "add a usage meter?", false)
+	fields := []widgets.Field{
+		widgets.NewNote(m.palette, "usage meters — track anything",
+			"energy, spend, requests, credits — any unit, with a cap and a reset cycle. update them from scripts with `sslug usage set`. skip freely: the dashboard shows probes either way."),
+		addF,
 	}
-	if isOpenRouter {
-		groups = append(groups, huh.NewGroup(
-			huh.NewConfirm().
-				Title("OpenRouter detected — attach the auto credits meter?").
-				Description("Fetched live from the OpenRouter credits API on every check.").
-				Value(&d.attachCredits),
-		))
+	var creditsF *widgets.ConfirmField
+	if strings.Contains(d.baseURL, "openrouter.ai") {
+		creditsF = widgets.NewConfirm(m.palette, "openrouter detected — attach the auto credits meter?", d.attachCredits)
+		creditsF.Hint = "fetched live from the openrouter credits api on every check."
+		fields = append(fields, creditsF)
 	}
 
-	m.form = m.newForm(groups...)
-	m.onFormDone(func() {
+	m.form = widgets.NewForm(m.palette, "", "", fields...)
+	m.harvest = func() {
+		d.addMeter = addF.Value
+		if creditsF != nil {
+			d.attachCredits = creditsF.Value
+		}
+	}
+	m.pendingDone = func() {
 		if d.attachCredits {
-			m.data.meters = append(m.data.meters, config.Meter{
+			d.meters = append(d.meters, config.Meter{
 				Name: "Credits", Unit: "USD", Kind: "auto",
 				Auto: "openrouter-credits", Reset: "never",
 			})
@@ -366,38 +441,56 @@ func (m *Model) enterMeters() (tea.Model, tea.Cmd) {
 		} else {
 			m.gotoStep = stepSummary
 		}
-	})
-	return m, m.form.Init()
+	}
+	return m, nil
 }
 
 // enterMeterForm runs one meter definition; loops while the user keeps adding.
 func (m *Model) enterMeterForm() (tea.Model, tea.Cmd) {
-	md := m.data.meterDraft
+	m.step = stepMeterForm
+	md := &m.data.meterDraft
 
-	m.form = m.newForm(huh.NewGroup(
-		huh.NewInput().Title("Meter name").Placeholder("Energy, Spend, Requests…").
-			Value(&md.name).Validate(func(s string) error {
-			if strings.TrimSpace(s) == "" {
-				return fmt.Errorf("name required")
-			}
-			return nil
-		}),
-		huh.NewInput().Title("Unit").Placeholder("USD").Value(&md.unit),
-		huh.NewInput().Title("Current value (blank = 0)").Value(&md.used).Validate(optionalFloat),
-		huh.NewInput().Title("Cap (blank = no cap)").Value(&md.cap).Validate(optionalFloat),
-		huh.NewSelect[string]().Title("Resets").
-			Options(
-				huh.NewOption("never", "never"),
-				huh.NewOption("monthly — on a day of the month", "monthly"),
-				huh.NewOption("weekly — on a weekday", "weekly"),
-				huh.NewOption("on a fixed date", "date"),
-			).Value(&md.resetKind),
-		huh.NewInput().Title("Reset argument").
-			Description("monthly: day 1–31 · weekly: mon..sun · date: YYYY-MM-DD").
-			Value(&md.resetArg).
-			Validate(resetArgValidator(&md.resetKind)),
-	))
-	m.onFormDone(func() {
+	nameF := widgets.NewText(m.palette, "meter name", "Energy, Spend, Requests…")
+	nameF.Value = md.name
+	nameF.Validate = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("name required")
+		}
+		return nil
+	}
+	unitF := widgets.NewText(m.palette, "unit", "USD")
+	unitF.Value = md.unit
+	usedF := widgets.NewText(m.palette, "current value (blank = 0)", "0")
+	usedF.Value = md.used
+	usedF.Validate = optionalFloat
+	capF := widgets.NewText(m.palette, "cap (blank = no cap)", "1000")
+	capF.Value = md.cap
+	capF.Validate = optionalFloat
+	resetF := widgets.NewSelect(m.palette, "resets", []string{
+		"never",
+		"monthly — on a day of the month",
+		"weekly — on a weekday",
+		"on a fixed date",
+	})
+	resetKeys := []string{"never", "monthly", "weekly", "date"}
+	for i, k := range resetKeys {
+		if k == md.resetKind {
+			resetF.Selected = i
+		}
+	}
+	argF := widgets.NewText(m.palette, "reset argument", "monthly: 1-31 · weekly: mon..sun · date: YYYY-MM-DD")
+	argF.Value = md.resetArg
+
+	m.form = widgets.NewForm(m.palette, "", "", []widgets.Field{nameF, unitF, usedF, capF, resetF, argF}...)
+	m.harvest = func() {
+		md.name = nameF.Value
+		md.unit = unitF.Value
+		md.used = usedF.Value
+		md.cap = capF.Value
+		md.resetKind = resetKeys[resetF.Selected]
+		md.resetArg = argF.Value
+	}
+	m.pendingDone = func() {
 		mt := config.Meter{Name: strings.TrimSpace(md.name), Unit: strings.TrimSpace(md.unit), Kind: "manual"}
 		if s := strings.TrimSpace(md.used); s != "" {
 			mt.Used, _ = strconv.ParseFloat(s, 64)
@@ -406,40 +499,18 @@ func (m *Model) enterMeterForm() (tea.Model, tea.Cmd) {
 			mt.Cap, _ = strconv.ParseFloat(s, 64)
 		}
 		if md.resetKind != "never" {
-			mt.Reset = md.resetKind + ":" + strings.TrimSpace(md.resetArg)
+			arg := strings.TrimSpace(md.resetArg)
+			if arg == "" {
+				arg = "1"
+			}
+			mt.Reset = md.resetKind + ":" + arg
 		} else {
 			mt.Reset = "never"
 		}
 		m.data.meters = append(m.data.meters, mt)
 		m.gotoStep = stepMeters
-	})
-	return m, m.form.Init()
-}
-
-func resetArgValidator(kind *string) func(string) error {
-	return func(s string) error {
-		s = strings.TrimSpace(s)
-		switch *kind {
-		case "never":
-			return nil
-		case "monthly":
-			n, err := strconv.Atoi(s)
-			if err != nil || n < 1 || n > 31 {
-				return fmt.Errorf("day of month, 1–31")
-			}
-		case "weekly":
-			switch strings.ToLower(s) {
-			case "mon", "tue", "wed", "thu", "fri", "sat", "sun":
-			default:
-				return fmt.Errorf("mon, tue, wed, thu, fri, sat or sun")
-			}
-		case "date":
-			if _, err := time.Parse("2006-01-02", s); err != nil {
-				return fmt.Errorf("YYYY-MM-DD")
-			}
-		}
-		return nil
 	}
+	return m, nil
 }
 
 // --- step: summary ---
@@ -454,30 +525,26 @@ func (m *Model) enterSummary() (tea.Model, tea.Cmd) {
 	fmt.Fprintf(&b, "  %-10s %s\n", "kind", d.kind)
 	fmt.Fprintf(&b, "  %-10s %s\n", "endpoint", d.baseURL)
 	fmt.Fprintf(&b, "  %-10s %s\n", "key", secret.Redact(d.keyRef))
-	if len(d.models) > 0 {
-		var favs []string
-		for _, mod := range d.models {
-			if mod.Favourite {
-				favs = append(favs, mod.ID)
-			}
+	var favs []string
+	for _, mod := range d.models {
+		if mod.Favourite {
+			favs = append(favs, mod.ID)
 		}
+	}
+	if len(favs) > 0 {
 		fmt.Fprintf(&b, "  %-10s %s\n", "favourites", strings.Join(favs, ", "))
 	}
 	for _, mt := range d.meters {
 		fmt.Fprintf(&b, "  %-10s %s (%.4g %s, resets %s)\n", "meter", mt.Name, mt.Used, mt.Unit, mt.Reset)
 	}
 
-	m.form = m.newForm(huh.NewGroup(
-		huh.NewNote().
-			Title("ready to save").
-			Description(b.String()),
-		huh.NewConfirm().
-			Title("Save this provider?").
-			Affirmative("Save").
-			Negative("Discard").
-			Value(&d.summaryConfirm),
-	))
-	m.onFormDone(func() {
+	saveF := widgets.NewButtons(m.palette, []string{"save", "discard"})
+	m.form = widgets.NewForm(m.palette, "", "", []widgets.Field{
+		widgets.NewNote(m.palette, "ready to save", strings.TrimRight(b.String(), "\n")),
+		saveF,
+	}...)
+	m.harvest = func() { d.summaryConfirm = saveF.Value() == "save" }
+	m.pendingDone = func() {
 		if !d.summaryConfirm {
 			m.step = stepAborted
 			return
@@ -488,8 +555,8 @@ func (m *Model) enterSummary() (tea.Model, tea.Cmd) {
 			return
 		}
 		m.gotoStep = stepAddAnother
-	})
-	return m, m.form.Init()
+	}
+	return m, nil
 }
 
 // save stores the key material and upserts the provider into config.
@@ -500,7 +567,7 @@ func (m *Model) save() error {
 			return fmt.Errorf("store key: %w", err)
 		}
 	}
-	p := BuildProvider(d.name, d.label, d.kind, d.baseURL, d.keyRef, "", d.models, d.meters)
+	p := BuildProvider(d.name, d.label, d.kind, d.baseURL, d.keyRef, d.note, d.models, d.meters)
 	m.cfg.Upsert(p)
 	return config.Save(m.cfg)
 }
@@ -510,21 +577,33 @@ func (m *Model) save() error {
 func (m *Model) enterAddAnother() (tea.Model, tea.Cmd) {
 	m.step = stepAddAnother
 	d := m.data
-	m.form = m.newForm(huh.NewGroup(
-		huh.NewNote().
-			Title(fmt.Sprintf("%s saved.", m.data.name)).
-			Description("The dashboard opens with it next time you run sslug."),
-		huh.NewConfirm().
-			Title("Add another provider?").
-			Value(&d.addAnother),
-	))
-	m.onFormDone(func() {
+	againF := widgets.NewButtons(m.palette, []string{"add another", "done"})
+	m.form = widgets.NewForm(m.palette, "", "", []widgets.Field{
+		widgets.NewNote(m.palette, fmt.Sprintf("%s saved.", d.name),
+			"the dashboard opens with it next time you run sslug."),
+		againF,
+	}...)
+	m.harvest = func() { d.addAnother = againF.Value() == "add another" }
+	m.pendingDone = func() {
 		if d.addAnother {
-			m.data = &wizardData{providerCount: len(m.cfg.Providers)}
+			count := len(m.cfg.Providers)
+			m.data = &wizardData{providerCount: count}
 			m.gotoStep = stepIdentity
 		} else {
 			m.gotoStep = stepDone
 		}
-	})
-	return m, m.form.Init()
+	}
+	return m, nil
+}
+
+// optionalFloat validates a widgets text input that may be blank or a float.
+func optionalFloat(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
+		return fmt.Errorf("must be a number")
+	}
+	return nil
 }

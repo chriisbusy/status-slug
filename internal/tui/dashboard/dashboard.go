@@ -4,12 +4,14 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"os"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -97,9 +99,6 @@ type model struct {
 
 	// Overlay state machine (see overlays.go).
 	ov overlayState
-	// Field pointers for the active huh form (settings / meter forms).
-	ovFields     map[string]*string
-	ovBoolFields map[string]*bool
 
 	// Wizard popup (modal). Non-nil while the setup wizard is open.
 	wiz *wizard.Model
@@ -112,6 +111,10 @@ type model struct {
 
 	// Panel prefs persisted in state (sort, group).
 	prefs panelPrefs
+
+	// Animated meter bars, keyed "<provider>/<meter>".
+	bars   map[string]progress.Model
+	barPct map[string]float64
 
 	// lastCheck for auto-refresh bookkeeping.
 	lastCheck time.Time
@@ -223,6 +226,7 @@ func New(cfg config.Config, st *state.File) model {
 	if len(cfg.Providers) == 0 {
 		m.openWizard("")
 	}
+	_ = m.syncBars() // establish bar models at construction
 	return m
 }
 
@@ -325,6 +329,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // a newer size already superseded this one
 		}
 		m.width, m.height = m.pendingW, m.pendingH
+		m.bars = nil // bar models carry width; recreate at the new size
 		if m.wiz != nil {
 			wm, cmd := m.wiz.UpdateModel(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 			m.wiz = &wm
@@ -373,6 +378,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spin, cmd = m.spin.Update(msg)
 			return m, cmd
+		}
+		return m, nil
+
+	case progress.FrameMsg:
+		// Animate meter bars toward their targets.
+		var cmds []tea.Cmd
+		for k, bar := range m.bars {
+			nb, cmd := bar.Update(msg)
+			m.bars[k] = nb
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 	}
@@ -471,12 +491,23 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		m.ov = m.newSettingsOverlay()
 		if m.ov.kind == overlayForm {
-			return m, m.ov.form.Init()
+			return m, dashBlinkTick()
 		}
 	case "a":
 		m.openWizard("")
 		if m.wiz != nil {
 			return m, m.wiz.Init()
+		}
+		return m, nil
+	case "r":
+		// Reconfigure the selected provider through the wizard popup.
+		if m.focused == panelStatus {
+			if p := m.selectedProvider(); p != nil {
+				m.openWizard(p.Name)
+				if m.wiz != nil {
+					return m, m.wiz.Init()
+				}
+			}
 		}
 		return m, nil
 	case "d":
@@ -679,6 +710,68 @@ func shouldBell(prev, next string) bool {
 	return prev != "down" && next == "down"
 }
 
+// syncBars animates meter bars toward their current values. Called after
+// any state change that can move a meter (check results, usage set).
+func (m *model) syncBars() tea.Cmd {
+	if m.bars == nil {
+		m.bars = map[string]progress.Model{}
+		m.barPct = map[string]float64{}
+	}
+	w := m.width/3 - 8
+	if w < 10 {
+		w = 10
+	}
+	if w > 40 {
+		w = 40
+	}
+	var cmds []tea.Cmd
+	for _, p := range m.cfg.Providers {
+		for _, meter := range p.Meters {
+			if meter.Cap <= 0 {
+				continue
+			}
+			key := p.Name + "/" + meter.Name
+			val := meter.Used
+			if mv := m.st.GetMeter(p.Name, meter.Name); mv != nil {
+				val = mv.Value
+			}
+			pct := val / meter.Cap
+			if pct > 1 {
+				pct = 1
+			}
+			bar, ok := m.bars[key]
+			if !ok {
+				bar = progress.New(
+					progress.WithWidth(w),
+					progress.WithoutPercentage(),
+					progress.WithColorFunc(func(total, current float64) color.Color {
+						ratio := current / total
+						switch {
+						case ratio >= 0.85:
+							return lipgloss.Color(m.palette[theme.Err])
+						case ratio >= 0.6:
+							return lipgloss.Color(m.palette[theme.Warn])
+						default:
+							return lipgloss.Color(m.palette[theme.OK])
+						}
+					}),
+				)
+				m.bars[key] = bar
+			}
+			if m.barPct[key] != pct {
+				m.barPct[key] = pct
+				if cmd := bar.SetPercent(pct); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+		}
+	}
+	if len(cmds) > 0 {
+		return tea.Batch(cmds...)
+	}
+	return nil
+}
+
 func (m model) probeTimeout() time.Duration {
 	if m.cfg.Settings.ProbeTimeout > 0 {
 		return time.Duration(m.cfg.Settings.ProbeTimeout) * time.Second
@@ -709,7 +802,7 @@ func (m model) handleCheckResult(msg checkResultMsg) (tea.Model, tea.Cmd) {
 		m.checking = false
 		m.lastCheck = time.Now()
 	}
-	return m, nil
+	return m, m.syncBars()
 }
 
 // --- views ---
@@ -729,6 +822,22 @@ func (m model) cycleView() model {
 	}
 	m.st.UI.View = next
 	_ = m.st.Save()
+	// Clamp scroll/selection so no pane loses its content to out-of-range
+	// offsets in the new layout.
+	for p := panelID(0); p < panelCount; p++ {
+		if max := m.maxSelection(p); m.sel[p] > max && max >= 0 {
+			m.sel[p] = max
+		}
+		if m.sel[p] < 0 {
+			m.sel[p] = 0
+		}
+		if max := m.maxScroll(p); m.scroll[p] > max {
+			m.scroll[p] = max
+		}
+		if m.scroll[p] < 0 {
+			m.scroll[p] = 0
+		}
+	}
 	return m
 }
 
@@ -1204,6 +1313,7 @@ func (dashKeyMap) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "menu")),
 		key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inspect")),
 		key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
+		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "edit")),
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
 		key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "zoom")),
 		key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
