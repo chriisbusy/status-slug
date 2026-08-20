@@ -466,9 +466,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = m.newMenuOverlay(panelStats)
 	case "p":
 		return m.cycleView(), nil
-	case "T":
+	case "e":
 		return m.cycleTheme(), nil
-	case "S":
+	case "o":
 		m.ov = m.newSettingsOverlay()
 		if m.ov.kind == overlayForm {
 			return m, m.ov.form.Init()
@@ -1133,9 +1133,9 @@ func (m model) renderHeader() string {
 	nav := []navBtn{
 		{accent.Render("[m]") + muted.Render("enu"), "menu"},
 		{accent.Render("[p]") + muted.Render("reset: "+m.activeViewDef().Name), "cycle-view"},
-		{accent.Render("[T]") + muted.Render("heme"), "theme"},
+		{muted.Render("th") + accent.Render("[e]") + muted.Render("me"), "theme"},
 		checkBtn,
-		{accent.Render("[S]") + muted.Render("ettings"), "settings"},
+		{accent.Render("[o]") + muted.Render("ptions"), "settings"},
 		{accent.Render("[?]"), "help"},
 	}
 	info := " " + dots
@@ -1198,8 +1198,8 @@ func (dashKeyMap) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "check one")),
 		key.NewBinding(key.WithKeys("s/u/f/t"), key.WithHelp("s/u/f/t", "menus")),
 		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "views")),
-		key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "theme")),
-		key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "settings")),
+		key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "theme")),
+		key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
 		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
 		key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "menu")),
 		key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inspect")),

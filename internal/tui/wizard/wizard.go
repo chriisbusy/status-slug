@@ -77,7 +77,7 @@ type meterDraft struct {
 type Model struct {
 	cfg         config.Config
 	palette     theme.Palette
-	data        wizardData
+	data        *wizardData
 	step        step
 	gotoStep    step // set by pendingDone; stepCompleted dispatches on it
 	form        *huh.Form
@@ -95,10 +95,10 @@ func New(cfg config.Config, reconfigure string) Model {
 	m := Model{
 		cfg:         cfg,
 		palette:     palette,
+		data:        &wizardData{providerCount: len(cfg.Providers)},
 		step:        stepIdentity,
 		reconfigure: reconfigure,
 	}
-	m.data.providerCount = len(cfg.Providers)
 	m.spin = spinner.New(spinner.WithSpinner(spinner.Line),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color(palette[theme.Accent]))))
 	m.enterIdentity()
@@ -113,6 +113,16 @@ func (m Model) StepName() string {
 		return ""
 	}
 	return stepNames[i]
+}
+
+// WizardInfo exposes read-only progress info for embedding hosts and tests.
+type WizardInfo struct {
+	Name, Label, Kind, BaseURL string
+}
+
+// Info returns the wizard's in-flight answers (read-only).
+func (m Model) Info() WizardInfo {
+	return WizardInfo{Name: m.data.name, Label: m.data.label, Kind: m.data.kind, BaseURL: m.data.baseURL}
 }
 
 // Config returns the wizard's updated config.
@@ -190,9 +200,23 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+// translateMouse maps wheel events to arrow keys (huh v2 has no mouse
+// support; wheel-to-arrows is the honest subset).
+func translateMouse(msg tea.Msg) tea.Msg {
+	if wh, ok := msg.(tea.MouseWheelMsg); ok {
+		switch wh.Button {
+		case tea.MouseWheelUp:
+			return tea.KeyPressMsg{Code: tea.KeyUp}
+		case tea.MouseWheelDown:
+			return tea.KeyPressMsg{Code: tea.KeyDown}
+		}
+	}
+	return msg
+}
+
 // UpdateModel is Update with a concrete return type for embedding hosts.
 func (m Model) UpdateModel(msg tea.Msg) (Model, tea.Cmd) {
-	tm, cmd := m.Update(msg)
+	tm, cmd := m.Update(translateMouse(msg))
 	if wm, ok := tm.(Model); ok {
 		return wm, cmd
 	}
@@ -215,6 +239,10 @@ func Run(cfg config.Config, reconfigure string) (config.Config, error) {
 }
 
 // --- layout ---
+
+// newForm wraps a group in a themed, size-bounded huh form. The height
+// budget engages huh's internal viewport so long steps scroll instead of
+// clipping (focused field stays visible).
 func (m Model) newForm(groups ...*huh.Group) *huh.Form {
 	w := 76
 	if m.width > 0 && m.width-8 < w {
@@ -223,9 +251,15 @@ func (m Model) newForm(groups ...*huh.Group) *huh.Form {
 	if w < 40 {
 		w = 40
 	}
+	// Header (art 2 + step line + hint + spacing) + popup chrome.
+	h := m.height - 12
+	if h < 10 {
+		h = 10
+	}
 	return huh.NewForm(groups...).
 		WithTheme(theme.HuhTheme(m.palette)).
 		WithWidth(w).
+		WithHeight(h).
 		WithShowHelp(true)
 }
 
@@ -360,7 +394,7 @@ func (m Model) stepCompleted() (tea.Model, tea.Cmd) {
 // --- step: identity ---
 
 func (m *Model) enterIdentity() {
-	d := &m.data
+	d := m.data
 	if m.reconfigure != "" {
 		if existing := m.cfg.Find(m.reconfigure); existing != nil {
 			d.name = existing.Name

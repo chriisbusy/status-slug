@@ -161,15 +161,65 @@ var builtinMono = Palette{
 	KeyHint:        "",
 }
 
+// gruvbox: warm amber/green family — nothing like the blue themes.
+var builtinGruvbox = Palette{
+	Bg:             "#282828",
+	Fg:             "#EBDBB2",
+	Muted:          "#928374",
+	Title:          "#F2E5BC",
+	Accent:         "#FABD2F",
+	BoxBorder:      "#504945",
+	BoxBorderFocus: "#FABD2F",
+	OK:             "#B8BB26",
+	Warn:           "#FABD2F",
+	Err:            "#FB4934",
+	Unknown:        "#928374",
+	BarFill:        "#B8BB26",
+	BarEmpty:       "#504945",
+	SparkLo:        "#504945",
+	SparkHi:        "#B8BB26",
+	GradLo:         "#FABD2F",
+	GradHi:         "#B8BB26",
+	SelectedBg:     "#3C3836",
+	SelectedFg:     "#F2E5BC",
+	KeyHint:        "#928374",
+}
+
+// dracula: purple/pink/green family — a third distinct look.
+var builtinDracula = Palette{
+	Bg:             "#282A36",
+	Fg:             "#F8F8F2",
+	Muted:          "#6272A4",
+	Title:          "#F8F8F2",
+	Accent:         "#BD93F9",
+	BoxBorder:      "#44475A",
+	BoxBorderFocus: "#BD93F9",
+	OK:             "#50FA7B",
+	Warn:           "#F1FA8C",
+	Err:            "#FF5555",
+	Unknown:        "#6272A4",
+	BarFill:        "#BD93F9",
+	BarEmpty:       "#44475A",
+	SparkLo:        "#44475A",
+	SparkHi:        "#50FA7B",
+	GradLo:         "#BD93F9",
+	GradHi:         "#FF79C6",
+	SelectedBg:     "#44475A",
+	SelectedFg:     "#F8F8F2",
+	KeyHint:        "#6272A4",
+}
+
 var builtins = map[string]Palette{
-	"sstop": builtinSstop,
-	"mocha": builtinMocha,
-	"nord":  builtinNord,
-	"mono":  builtinMono,
+	"sstop":   builtinSstop,
+	"mocha":   builtinMocha,
+	"nord":    builtinNord,
+	"gruvbox": builtinGruvbox,
+	"dracula": builtinDracula,
+	"mono":    builtinMono,
 }
 
 // BuiltinNames returns the sorted builtin theme names.
-func BuiltinNames() []string { return []string{"sstop", "mocha", "nord", "mono"} }
+func BuiltinNames() []string { return []string{"sstop", "mocha", "nord", "gruvbox", "dracula", "mono"} }
 
 // Load resolves a theme name to a palette.
 // name may be a builtin or the stem of a file in themesDir.

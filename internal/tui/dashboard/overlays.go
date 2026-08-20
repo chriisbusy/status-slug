@@ -1105,8 +1105,8 @@ const helpMarkdown = `# sslug keys
 | i | inspect selected row |
 | s / u / f / t | pane menus |
 | p | cycle view presets |
-| T | cycle themes (live) |
-| S | settings |
+| e | cycle themes (live) |
+| o | settings |
 | a | add provider (exits to wizard) |
 | d | remove selected provider |
 | z | zoom pane |

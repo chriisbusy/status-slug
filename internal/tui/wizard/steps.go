@@ -49,7 +49,7 @@ func statusColor(pal theme.Palette, status string) string {
 // --- step: key ---
 
 func (m *Model) enterKey() (tea.Model, tea.Cmd) {
-	d := &m.data
+	d := m.data
 	m.step = stepKey
 
 	srcOpts := []huh.Option[string]{
@@ -176,7 +176,7 @@ func (m *Model) enterValidate() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	m.step = stepValidate
-	d := &m.data
+	d := m.data
 	if d.keyRef == "" || d.keyRef == "none" || d.baseURL == "" {
 		// Nothing to validate against.
 		return m.enterModelsFetch()
@@ -195,7 +195,7 @@ func (m *Model) enterValidate() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) afterValidate() (tea.Model, tea.Cmd) {
-	d := &m.data
+	d := m.data
 	if d.validation.Status == check.OK {
 		m.gotoStep = stepModels
 		return m.enterModelsFetch()
@@ -236,7 +236,7 @@ func (m *Model) afterValidate() (tea.Model, tea.Cmd) {
 
 func (m *Model) enterModelsFetch() (tea.Model, tea.Cmd) {
 	m.step = stepModels
-	d := &m.data
+	d := m.data
 	if d.baseURL == "" {
 		// No endpoint — skip fetch, manual entry only.
 		return m.enterModelsForm()
@@ -259,7 +259,7 @@ func (m *Model) enterModelsFetch() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) enterModelsForm() (tea.Model, tea.Cmd) {
-	d := &m.data
+	d := m.data
 	m.step = stepModels
 
 	var note *huh.Note
@@ -328,7 +328,7 @@ func (m *Model) enterModelsForm() (tea.Model, tea.Cmd) {
 
 func (m *Model) enterMeters() (tea.Model, tea.Cmd) {
 	m.step = stepMeters
-	d := &m.data
+	d := m.data
 	d.addMeter = false
 
 	isOpenRouter := strings.Contains(m.data.baseURL, "openrouter.ai")
@@ -372,7 +372,7 @@ func (m *Model) enterMeters() (tea.Model, tea.Cmd) {
 
 // enterMeterForm runs one meter definition; loops while the user keeps adding.
 func (m *Model) enterMeterForm() (tea.Model, tea.Cmd) {
-	md := &m.data.meterDraft
+	md := m.data.meterDraft
 
 	m.form = m.newForm(huh.NewGroup(
 		huh.NewInput().Title("Meter name").Placeholder("Energy, Spend, Requests…").
@@ -446,7 +446,7 @@ func resetArgValidator(kind *string) func(string) error {
 
 func (m *Model) enterSummary() (tea.Model, tea.Cmd) {
 	m.step = stepSummary
-	d := &m.data
+	d := m.data
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "  %-10s %s\n", "name", d.name)
@@ -494,7 +494,7 @@ func (m *Model) enterSummary() (tea.Model, tea.Cmd) {
 
 // save stores the key material and upserts the provider into config.
 func (m *Model) save() error {
-	d := &m.data
+	d := m.data
 	if d.keyMaterial != "" {
 		if err := secret.Store(d.keyRef, d.keyMaterial); err != nil {
 			return fmt.Errorf("store key: %w", err)
@@ -509,7 +509,7 @@ func (m *Model) save() error {
 
 func (m *Model) enterAddAnother() (tea.Model, tea.Cmd) {
 	m.step = stepAddAnother
-	d := &m.data
+	d := m.data
 	m.form = m.newForm(huh.NewGroup(
 		huh.NewNote().
 			Title(fmt.Sprintf("%s saved.", m.data.name)).
@@ -520,7 +520,7 @@ func (m *Model) enterAddAnother() (tea.Model, tea.Cmd) {
 	))
 	m.onFormDone(func() {
 		if d.addAnother {
-			m.data = wizardData{providerCount: len(m.cfg.Providers)}
+			m.data = &wizardData{providerCount: len(m.cfg.Providers)}
 			m.gotoStep = stepIdentity
 		} else {
 			m.gotoStep = stepDone
