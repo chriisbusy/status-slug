@@ -594,7 +594,7 @@ func (m model) handleInputSubmit(inputFor, val string) (tea.Model, tea.Cmd) {
 		} else {
 			m.footer = fmt.Sprintf("%s/%s = %.4g", provName, meterName, f)
 		}
-		return m, m.syncBars()
+		return m, nil
 	case inputFor == "fav-custom":
 		if val == "" {
 			return m, nil

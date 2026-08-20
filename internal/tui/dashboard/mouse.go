@@ -11,9 +11,11 @@ import (
 func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	x, y := mouse.X, mouse.Y
 
-	// Header buttons.
-	for _, r := range m.regions {
-		if !inRegion(x, y, r) {
+	// Header buttons. Geometry is recomputed from the same layout helper that
+	// renders the header; render-time model copies cannot persist hit regions.
+	_, regions := m.headerRows()
+	for _, r := range regions {
+		if r.w <= 0 || !inRegion(x, y, r) {
 			continue
 		}
 		switch r.kind {
@@ -25,14 +27,6 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "cycle-view":
 			return m.cycleView(), nil
-		case "theme":
-			return m.cycleTheme(), nil
-		case "settings":
-			m.ov = m.newSettingsOverlay()
-			if m.ov.kind == overlayForm {
-				return m, dashBlinkTick()
-			}
-			return m, nil
 		case "integrations":
 			m.ov = m.newIntegrationsOverlay()
 			return m, nil
@@ -63,27 +57,42 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	}
 
 	// Pane rows: find which pane contains (x, y) by replaying layout geometry.
-	p, localRow, paneX, ok := m.panelAt(x, y)
+	p, localRow, paneX, paneW, ok := m.panelAt(x, y)
 	if !ok {
 		return m, nil
 	}
 	m.focused = p
-	// Stats header row click → cycle sort on that column.
-	if p == panelStats && localRow == 0 {
-		// Compute the pane's content width to resolve the responsive column set.
-		paneW := m.width - paneX - 4 // borders + padding allowance
-		cols, keys := statsColumnsForWidth(paneW)
-		col := statsColumnAt(x-paneX-1, cols) // -1 for border
-		if col >= 0 && col < len(keys) {
-			m.cycleStatsSort(keys[col])
+	// Stats header click → cycle sort on the rendered column. Compact stats
+	// has a summary row before its header; full table layout keeps header at 0.
+	if p == panelStats {
+		paneW := paneW - 2 // renderPane passes this exact inner width.
+		if paneW < 50 {
+			if localRow == 1 {
+				if key, ok := compactStatsColumnAt(x-paneX-1, paneW); ok {
+					m.cycleStatsSort(key)
+				}
+				return m, nil
+			}
+			if localRow < 2 {
+				return m, nil
+			}
+		} else if localRow == 0 {
+			cols, keys := statsColumnsForWidth(paneW)
+			col := statsColumnAt(x-paneX-1, cols)
+			if col >= 0 && col < len(keys) {
+				m.cycleStatsSort(keys[col])
+			}
+			return m, nil
 		}
-		return m, nil
 	}
 	if localRow >= 1 || (p != panelStats && localRow >= 0) {
-		// Content rows: stats table has header at row 0, data from row 1.
 		row := localRow
 		if p == panelStats {
-			row = localRow - 1
+			if paneW-2 < 50 {
+				row = localRow - 2
+			} else {
+				row = localRow - 1
+			}
 		}
 		m.sel[p] = m.scroll[p] + row
 		if max := m.maxSelection(p); m.sel[p] > max && max >= 0 {
@@ -115,7 +124,7 @@ func (m model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		m.ov.vp, cmd = m.ov.vp.Update(tea.MouseWheelMsg(mouse))
 		return m, cmd
 	}
-	p, _, _, ok := m.panelAt(mouse.X, mouse.Y)
+	p, _, _, _, ok := m.panelAt(mouse.X, mouse.Y)
 	if !ok {
 		return m, nil
 	}
@@ -182,17 +191,18 @@ func (m model) menuClick(x, y int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// panelAt maps screen coordinates to a pane + local content row + pane origin x.
-// Row -1 means the pane's top border (heading); row 0 is the first content row.
-func (m model) panelAt(x, y int) (panelID, int, int, bool) {
+// panelAt maps screen coordinates to a pane, local content row, pane origin x,
+// and pane total width. Row -1 means the pane's top border; row 0 is the first
+// content row.
+func (m model) panelAt(x, y int) (panelID, int, int, int, bool) {
 	if y < 2 || y >= m.height-1 {
-		return 0, 0, 0, false // header (2 lines) / footer
+		return 0, 0, 0, 0, false // header (2 lines) / footer
 	}
 	view := m.activeViewDef()
 	stack := m.width < 100 || m.height < 24 || view.Arrangement == "stack" || m.zoomed
 
 	if m.zoomed {
-		return m.focused, y - 3, 0, true
+		return m.focused, y - 3, 0, m.width, true
 	}
 	if stack {
 		panels := m.visiblePanels()
@@ -204,7 +214,7 @@ func (m model) panelAt(x, y int) (panelID, int, int, bool) {
 			idx = len(panels) - 1
 		}
 		local := rel - idx*per - 1 // -1 for border
-		return panels[idx], local, 0, true
+		return panels[idx], local, 0, m.width, true
 	}
 
 	// Grid: round-robin columns exactly as renderGrid.
@@ -233,9 +243,11 @@ func (m model) panelAt(x, y int) (panelID, int, int, bool) {
 
 	col := left
 	paneX := 0
+	paneW := leftW
 	if x >= leftW && len(right) > 0 {
 		col = right
 		paneX = leftW
+		paneW = m.width - leftW
 	}
 	avail := m.height - 3
 	per := avail / len(col)
@@ -245,7 +257,7 @@ func (m model) panelAt(x, y int) (panelID, int, int, bool) {
 		idx = len(col) - 1
 	}
 	local := rel - idx*per - 1
-	return col[idx], local, paneX, true
+	return col[idx], local, paneX, paneW, true
 }
 
 func inRegion(x, y int, r hitRegion) bool {

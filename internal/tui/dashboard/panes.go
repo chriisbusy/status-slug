@@ -5,10 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/table"
 	"charm.land/lipgloss/v2"
-
+	"github.com/charmbracelet/x/ansi"
 	"github.com/chriisbusy/status-slug/internal/config"
 	"github.com/chriisbusy/status-slug/internal/provider"
 	"github.com/chriisbusy/status-slug/internal/state"
@@ -84,18 +83,29 @@ func (m model) renderStatusPane(w, h int, compact bool) string {
 	if len(provs) == 0 {
 		return m.emptyHint("no providers —", "a", "dd your first one")
 	}
-	var lines []string
+	ok, account, down, unknown := m.healthCounts()
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	lines := []string{
+		fmt.Sprintf("%s %s  %s  %s  %s  %s",
+			dim.Render("fleet"),
+			m.statusStrip(provs, w/3),
+			m.statusPill("ok", ok),
+			m.statusPill("account", account),
+			m.statusPill("down", down),
+			m.statusPill("unknown", unknown)),
+		dim.Render("row = live endpoint card · reason line carries the why"),
+	}
 	if m.prefs.statusGroup {
-		lines = m.statusGrouped(provs, w)
+		lines = append(lines, m.statusGrouped(provs, w, compact)...)
 	} else {
 		for i, p := range provs {
-			lines = append(lines, m.statusRow(p, i == m.sel[panelStatus], w))
+			lines = append(lines, m.statusRow(p, i == m.sel[panelStatus], w, compact)...)
 		}
 	}
 	return renderScrollable(lines, m.scroll[panelStatus], h, m.palette)
 }
 
-func (m model) statusGrouped(provs []*config.Provider, w int) []string {
+func (m model) statusGrouped(provs []*config.Provider, w int, compact bool) []string {
 	// Group by label preserving sorted order within groups.
 	var order []string
 	byLabel := map[string][]*config.Provider{}
@@ -113,17 +123,17 @@ func (m model) statusGrouped(provs []*config.Provider, w int) []string {
 	selIdx := 0
 	for _, l := range order {
 		hdr := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelStatus))).Bold(true).
-			Render("── " + l + " ")
+			Render("╼ " + strings.ToUpper(l) + " ")
 		lines = append(lines, hdr)
 		for _, p := range byLabel[l] {
-			lines = append(lines, m.statusRow(p, selIdx == m.sel[panelStatus], w))
+			lines = append(lines, m.statusRow(p, selIdx == m.sel[panelStatus], w, compact)...)
 			selIdx++
 		}
 	}
 	return lines
 }
 
-func (m model) statusRow(p *config.Provider, selected bool, w int) string {
+func (m model) statusRow(p *config.Provider, selected bool, w int, compact bool) []string {
 	status := "unknown"
 	latency := ""
 	latencyMs := 0.0
@@ -142,39 +152,59 @@ func (m model) statusRow(p *config.Provider, selected bool, w int) string {
 		}
 	}
 	dot := m.probeGlyph(status)
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Fg]))
-	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor(m.palette, status)))
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor(m.palette, status))).Bold(true)
 	if !p.Enabled {
-		// Disabled providers dim and tag instead of probing.
 		status = "disabled"
+		reason = "disabled · skipped by probes; usage meters still shown"
 		dot = dim.Render("◌")
 		nameStyle = dim
 		statusStyle = dim
 	}
-
-	line := fmt.Sprintf("%s %s %s %s  %s",
-		dot,
-		nameStyle.Render(fmt.Sprintf("%-18s", truncate(p.Name, 18))),
-		statusStyle.Render(fmt.Sprintf("%-8s", status)),
-		m.latencyStyle(latencyMs).Render(fmt.Sprintf("%7s", latency)),
-		dim.Render(age))
-	if reason != "" && status != "ok" {
-		reasonStyle := dim
-		if status == "account" {
-			reasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn]))
-		} else if status == "down" {
-			reasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Err]))
-		}
-		line += "  " + reasonStyle.Render(reason)
+	label := p.Label
+	if label == "" {
+		label = p.Kind
 	}
+	if label == "" {
+		label = "custom"
+	}
+	labelChip := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
+		Background(lipgloss.Color(m.panelChrome(panelStatus))).
+		Render(" " + truncate(label, 10) + " ")
+	meta := statusStyle.Render(status)
+	if latency != "" {
+		meta += dim.Render(" · ") + m.latencyStyle(latencyMs).Render(latency)
+	}
+	if age != "" {
+		meta += dim.Render(" · " + age)
+	}
+	primary := fmt.Sprintf("%s %s %s  %s",
+		dot,
+		nameStyle.Render(truncate(p.Name, 20)),
+		labelChip,
+		meta)
 	if selected {
-		return lipgloss.NewStyle().
+		primary = lipgloss.NewStyle().
 			Background(lipgloss.Color(m.palette[theme.SelectedBg])).
 			Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
-			Render("> " + line)
+			Render("> " + primary)
+	} else {
+		primary = "  " + primary
 	}
-	return "  " + line
+	lines := []string{primary}
+	detail := statusReasonSummary(status, reason, p.Kind, p.BaseURL)
+	if latencyMs > 0 && !compact {
+		detail = "latency " + m.latencyBar(latencyMs, 10) + " · " + detail
+	}
+	if detail != "" && !compact {
+		if w > 8 {
+			detail = truncate(detail, w-6)
+		}
+		lines = append(lines, "    "+dim.Render("╰─ ")+detail)
+	}
+	return lines
 }
 
 func statusColor(pal theme.Palette, status string) string {
@@ -187,6 +217,101 @@ func statusColor(pal theme.Palette, status string) string {
 		return pal[theme.Err]
 	}
 	return pal[theme.Unknown]
+}
+
+func (m model) statusPill(label string, count int) string {
+	role := theme.Unknown
+	switch label {
+	case "ok":
+		role = theme.OK
+	case "account":
+		role = theme.Warn
+	case "down":
+		role = theme.Err
+	}
+	st := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[role])).Bold(true)
+	return st.Render(fmt.Sprintf("%s %d", label, count))
+}
+
+func (m model) statusStrip(provs []*config.Provider, maxCells int) string {
+	if maxCells < 4 {
+		maxCells = 4
+	}
+	var b strings.Builder
+	for i, p := range provs {
+		if i >= maxCells {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render("…"))
+			break
+		}
+		status := "unknown"
+		if !p.Enabled {
+			status = "unknown"
+		} else if ps := m.st.Providers[p.Name]; ps != nil && ps.LastCheck != nil {
+			status = ps.LastCheck.Status
+		}
+		b.WriteString(m.glyphFor(status))
+	}
+	return b.String()
+}
+
+func (m model) latencyBar(ms float64, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	pct := ms / 1000
+	if pct > 1 {
+		pct = 1
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	fillCells := int(pct*float64(w) + 0.5)
+	if fillCells < 1 && ms > 0 {
+		fillCells = 1
+	}
+	if fillCells > w {
+		fillCells = w
+	}
+	fill := m.latencyStyle(ms).Render(strings.Repeat("▰", fillCells))
+	empty := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.BarEmpty])).Render(strings.Repeat("▱", w-fillCells))
+	return fill + empty
+}
+
+func statusReasonSummary(status, reason, kind, baseURL string) string {
+	switch status {
+	case "ok":
+		if kind != "" {
+			return kind + " · live endpoint"
+		}
+	case "disabled":
+		return reason
+	case "account":
+		if strings.Contains(reason, "401") || strings.Contains(reason, "403") {
+			return "account/auth problem — key or entitlement needs attention"
+		}
+		if strings.Contains(reason, "402") || strings.Contains(strings.ToLower(reason), "quota") {
+			return "account/quota problem — billing or quota limit"
+		}
+		return "account issue — " + reason
+	case "down":
+		low := strings.ToLower(reason)
+		switch {
+		case strings.Contains(low, "timeout"):
+			return "network timeout — provider did not answer in time"
+		case strings.Contains(low, "dns"):
+			return "network/DNS failure"
+		case strings.Contains(low, "5xx") || strings.Contains(low, "http 5") ||
+			strings.Contains(low, "status 5") || strings.Contains(low, "server error"):
+			return "provider/server failure"
+		case reason != "":
+			return "probe failed — " + reason
+		}
+	case "unknown":
+		if baseURL != "" {
+			return "not checked yet · " + baseURL
+		}
+	}
+	return ""
 }
 
 // --- usage pane ---
@@ -216,33 +341,71 @@ func (m model) renderUsagePane(w, h int, compact bool) string {
 	if len(m.cfg.Providers) == 0 {
 		return m.emptyHint("no providers —", "a", "dd your first one")
 	}
-	var lines []string
+	total, auto, _ := m.meterCounts()
+	manual := total - auto
+	uncapped := 0
+	capped := 0
+	capPctSum := 0.0
+	for _, p := range m.cfg.Providers {
+		for _, meter := range p.Meters {
+			if meter.Cap <= 0 {
+				uncapped++
+				continue
+			}
+			capped++
+			val := meter.Used
+			if mv := m.st.GetMeter(p.Name, meter.Name); mv != nil {
+				val = mv.Value
+			}
+			pct := val / meter.Cap
+			if pct < 0 {
+				pct = 0
+			}
+			if pct > 1 {
+				pct = 1
+			}
+			capPctSum += pct
+		}
+	}
+	capAvg := 0.0
+	if capped > 0 {
+		capAvg = capPctSum / float64(capped)
+	}
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	lines := []string{
+		fmt.Sprintf("%s %s %s",
+			dim.Render("cap avg"),
+			m.meterBar(capAvg, 14),
+			dim.Render(fmt.Sprintf("%3.0f%% across %d capped", capAvg*100, capped))),
+		fmt.Sprintf("%s %s  %s  %s  %s",
+			dim.Render("meters"),
+			m.usagePill("total", total),
+			m.usagePill("manual", manual),
+			m.usagePill("auto", auto),
+			m.usagePill("uncapped", uncapped)),
+	}
 	for _, p := range m.sortedProviders() {
-		// Provider header with health dot.
-		dot := "◌"
+		dot := m.glyphFor("unknown")
+		status := "unknown"
 		if ps := m.st.Providers[p.Name]; ps != nil && ps.LastCheck != nil {
-			dot = m.glyphFor(ps.LastCheck.Status)
-		} else {
-			dot = m.glyphFor("unknown")
+			status = ps.LastCheck.Status
+			dot = m.glyphFor(status)
 		}
 		hdr := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelUsage))).Bold(true)
-		lines = append(lines, dot+" "+hdr.Render(p.Name))
-		if p.Note != "" && !compact {
-			lines = append(lines, "  "+lipgloss.NewStyle().
-				Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(p.Note))
-		}
 		if len(p.Meters) == 0 {
-			lines = append(lines, "  "+m.emptyHint("no meters —", "u", " menu to add one"))
+			lines = append(lines, fmt.Sprintf("  %s %-18s %s", dot, hdr.Render(truncate(p.Name, 18)), dim.Render("no meters · "+status)))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %s %s %s", dot, hdr.Render(p.Name), dim.Render(status)))
+		if p.Note != "" && !compact {
+			lines = append(lines, "    "+dim.Render(p.Note))
 		}
 		for _, meter := range p.Meters {
 			lines = append(lines, m.meterLines(p.Name, meter, w, compact)...)
 		}
-		// Probe counters.
-		if ps := m.st.Providers[p.Name]; ps != nil && ps.Counters.Checks > 0 {
+		if ps := m.st.Providers[p.Name]; ps != nil && ps.Counters.Checks > 0 && !compact {
 			c := ps.Counters
-			lines = append(lines, "  "+lipgloss.NewStyle().
-				Foreground(lipgloss.Color(m.palette[theme.Muted])).
-				Render(fmt.Sprintf("probes: %d ok / %d account / %d down", c.OK, c.Account, c.Down)))
+			lines = append(lines, "    "+dim.Render(fmt.Sprintf("probes %d ok · %d account · %d down", c.OK, c.Account, c.Down)))
 		}
 		if !compact {
 			lines = append(lines, "")
@@ -260,47 +423,44 @@ func (m model) meterLines(provName string, meter config.Meter, w int, compact bo
 		val = mv.Value
 		setAt = mv.SetAt
 	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "  %s %.4g", meter.Name, val)
+	pct := 0.0
 	if meter.Cap > 0 {
-		fmt.Fprintf(&b, "/%.4g", meter.Cap)
-	} else {
-		b.WriteString(" (no cap)")
-	}
-	b.WriteString(" " + meter.Unit)
-	if meter.Kind == "auto" {
-		b.WriteString(" · auto")
-	}
-	if !setAt.IsZero() {
-		age := state.RelAge(time.Since(setAt))
-		if meter.Kind == "manual" {
-			b.WriteString("  · set " + age)
-		} else {
-			b.WriteString("  · " + age)
-		}
-	}
-	lines := []string{lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Fg])).Render(b.String())}
-
-	// Animated cap bar, colored by fill level like btop's meters.
-	if meter.Cap > 0 && w > 10 {
-		pct := val / meter.Cap
+		pct = val / meter.Cap
 		if pct > 1 {
 			pct = 1
 		}
-		key := provName + "/" + meter.Name
-		bar, ok := m.bars[key]
-		if !ok {
-			// Bar not synced yet (first frame): static render at target.
-			bar = progress.New(progress.WithWidth(w-6), progress.WithoutPercentage())
-			bar.SetPercent(pct)
+		if pct < 0 {
+			pct = 0
 		}
-		pctTxt := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
-			Render(fmt.Sprintf(" %.0f%%", pct*100))
-		lines = append(lines, "  "+bar.View()+pctTxt)
 	}
-
-	// Reset line: overdue in red, imminent (<2d) in amber, otherwise muted.
+	name := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true).Render(meter.Name)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	source := meter.Kind
+	if source == "" {
+		source = "manual"
+	}
+	line := fmt.Sprintf("    %s  %.4g", name, val)
+	if meter.Cap > 0 {
+		line += fmt.Sprintf(" / %.4g", meter.Cap)
+	} else {
+		line += " / uncapped"
+	}
+	line += " " + meter.Unit + dim.Render(" · "+source)
+	if meter.Kind == "auto" && meter.Auto != "" {
+		line += dim.Render(":" + meter.Auto)
+	}
+	lines := []string{line}
+	if meter.Cap > 0 && w > 14 {
+		barW := w - 14
+		if barW > 46 {
+			barW = 46
+		}
+		if barW < 10 {
+			barW = 10
+		}
+		lines = append(lines, "    "+m.meterBar(pct, barW)+" "+dim.Render(fmt.Sprintf("%3.0f%%", pct*100)))
+	}
+	var meta []string
 	if meter.Reset != "" && meter.Reset != "never" {
 		if rl, urgency := resetDescription(meter.Reset, time.Now()); rl != "" {
 			c := m.palette[theme.Muted]
@@ -310,11 +470,50 @@ func (m model) meterLines(provName string, meter config.Meter, w int, compact bo
 			case 1:
 				c = m.palette[theme.Warn]
 			}
-			lines = append(lines, "  "+lipgloss.NewStyle().
-				Foreground(lipgloss.Color(c)).Render(rl))
+			meta = append(meta, lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render(rl))
 		}
 	}
+	if !setAt.IsZero() {
+		meta = append(meta, dim.Render("set "+state.RelAge(time.Since(setAt))))
+	}
+	if len(meta) > 0 && !compact {
+		lines = append(lines, "    "+strings.Join(meta, dim.Render(" · ")))
+	}
 	return lines
+}
+
+func (m model) usagePill(label string, count int) string {
+	st := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelUsage))).Bold(true)
+	if label == "uncapped" && count > 0 {
+		st = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn])).Bold(true)
+	}
+	return st.Render(fmt.Sprintf("%s %d", label, count))
+}
+
+func (m model) meterBar(pct float64, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 1 {
+		pct = 1
+	}
+	fillCells := int(pct*float64(w) + 0.5)
+	if fillCells > w {
+		fillCells = w
+	}
+	fillColor := m.palette[theme.OK]
+	switch {
+	case pct >= 0.85:
+		fillColor = m.palette[theme.Err]
+	case pct >= 0.60:
+		fillColor = m.palette[theme.Warn]
+	}
+	fill := lipgloss.NewStyle().Foreground(lipgloss.Color(fillColor)).Render(strings.Repeat("█", fillCells))
+	empty := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.BarEmpty])).Render(strings.Repeat("░", w-fillCells))
+	return fill + empty
 }
 
 // resetDescription renders a human reset line and its urgency:
@@ -343,23 +542,25 @@ func (m model) renderFavouritesPane(w, h int, compact bool) string {
 	if len(favs) == 0 {
 		return m.emptyHint("no favourites —", "f", " menu to add one")
 	}
-	sparkW := w / 3
-	if sparkW > 20 {
-		sparkW = 20
-	}
-	if sparkW < 4 {
-		sparkW = 4
-	}
 	sparkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.SparkHi]))
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
-
-	var lines []string
+	healthy, maxP95 := m.favouriteHealth(favs)
+	nameW, providerW := favouriteColumnWidths(w)
+	header := fmt.Sprintf("%-*s %-*s %5s %5s %s", nameW, "model", providerW, "provider", "now", "p95", "latency tape")
+	lines := []string{
+		fmt.Sprintf("%s %s  %s  %s",
+			dim.Render("cockpit"),
+			m.favouriteStrip(favs, w/3),
+			m.usagePill("watched", len(favs)),
+			dim.Render(fmt.Sprintf("%d live · max p95 %.0fms", healthy, maxP95))),
+		dim.Render(truncate(header, w)),
+	}
 	for i, f := range favs {
 		name := f.model.ID
 		if f.model.Alias != "" {
 			name = f.model.Alias
 		}
-		name = truncate(name, 18)
+		name = truncate(name, nameW)
 		status := "unknown"
 		latency := ""
 		latencyMs := 0.0
@@ -378,21 +579,92 @@ func (m model) renderFavouritesPane(w, h int, compact bool) string {
 				}
 			}
 		}
+		p95 := percentile(ring, 95)
 		favMark := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelFavourites))).Render(m.glyphFav())
-		line := fmt.Sprintf("%s %-18s %s %s %s %s",
-			favMark, name, m.probeGlyph(status),
-			m.latencyStyle(latencyMs).Render(fmt.Sprintf("%7s", latency)),
-			sparkStyle.Render(Spark(ring, sparkW, m.cfg.Settings.GraphGlyphs)), dim.Render(age))
+		providerChip := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
+			Background(lipgloss.Color(m.panelChrome(panelFavourites))).
+			Render(" " + truncate(f.provider.Name, providerW-2) + " ")
+		prefix := fmt.Sprintf("%s %-*s %-*s %s %7s %5.0f ",
+			favMark,
+			nameW,
+			name,
+			providerW,
+			providerChip,
+			m.probeGlyph(status),
+			m.latencyStyle(latencyMs).Render(latency),
+			p95)
+		sparkW := w - 2 - ansi.StringWidth(prefix)
+		if sparkW > 30 {
+			sparkW = 30
+		}
+		if sparkW < 4 {
+			sparkW = 4
+		}
+		line := prefix + sparkStyle.Render(Spark(ring, sparkW, m.cfg.Settings.GraphGlyphs))
 		if i == m.sel[panelFavourites] && m.focused == panelFavourites {
-			lines = append(lines, lipgloss.NewStyle().
+			line = lipgloss.NewStyle().
 				Background(lipgloss.Color(m.palette[theme.SelectedBg])).
 				Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
-				Render("> "+line))
+				Render("> " + line)
 		} else {
-			lines = append(lines, "  "+line)
+			line = "  " + line
+		}
+		lines = append(lines, line)
+		if !compact {
+			detail := "    " + f.provider.Kind + " · " + status + " · " + age + " · tail " + m.cfg.Settings.GraphGlyphs
+			lines = append(lines, dim.Render(truncate(detail, w)))
 		}
 	}
 	return renderScrollable(lines, m.scroll[panelFavourites], h, m.palette)
+}
+
+func favouriteColumnWidths(w int) (nameW, providerW int) {
+	nameW, providerW = 20, 13
+	for nameW+providerW+31 > w && nameW > 10 {
+		nameW--
+	}
+	for nameW+providerW+31 > w && providerW > 9 {
+		providerW--
+	}
+	return nameW, providerW
+}
+
+func (m model) favouriteHealth(favs []favouriteEntry) (healthy int, maxP95 float64) {
+	for _, f := range favs {
+		if ps := m.st.Providers[f.provider.Name]; ps != nil {
+			if ms := ps.Models[f.model.ID]; ms != nil {
+				if ms.LastCheck != nil && ms.LastCheck.Status == "ok" {
+					healthy++
+				}
+				if p95 := percentile(ms.Ring, 95); p95 > maxP95 {
+					maxP95 = p95
+				}
+			}
+		}
+	}
+	return healthy, maxP95
+}
+
+func (m model) favouriteStrip(favs []favouriteEntry, maxCells int) string {
+	if maxCells < 4 {
+		maxCells = 4
+	}
+	var b strings.Builder
+	for i, f := range favs {
+		if i >= maxCells {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render("…"))
+			break
+		}
+		status := "unknown"
+		if ps := m.st.Providers[f.provider.Name]; ps != nil {
+			if ms := ps.Models[f.model.ID]; ms != nil && ms.LastCheck != nil {
+				status = ms.LastCheck.Status
+			}
+		}
+		b.WriteString(m.glyphFor(status))
+	}
+	return b.String()
 }
 
 // --- stats pane ---
@@ -411,21 +683,21 @@ type statsRow struct {
 
 // statsColumns are the table columns at full width; header click cycles sort.
 var statsColumns = []table.Column{
-	{Title: "name", Width: 20},
-	{Title: "checks", Width: 7},
-	{Title: "ok%", Width: 6},
-	{Title: "p50", Width: 7},
-	{Title: "p95", Width: 7},
-	{Title: "↓", Width: 5},
-	{Title: "ago", Width: 10},
+	{Title: "name", Width: 14},
+	{Title: "chk", Width: 4},
+	{Title: "ok", Width: 4},
+	{Title: "p50", Width: 5},
+	{Title: "p95", Width: 5},
+	{Title: "↓", Width: 3},
+	{Title: "ago", Width: 6},
 }
 
 // statsColKeys maps column index to sort key (aligned with statsColumns).
 var statsColKeys = []string{"name", "checks", "ok%", "p50", "p95", "down", "ago"}
 
-// statsColumnsForWidth returns the column set that fits w, dropping
-// less-critical columns (ago, then p50) before ever overflowing, and
-// shrinking name to absorb the remainder.
+// statsColumnsForWidth returns the column set that fits w. p50/p95/down are
+// core promises of the stats pane, so narrow layouts drop age and checks first
+// and then shrink the name column rather than hiding latency percentiles.
 func statsColumnsForWidth(w int) ([]table.Column, []string) {
 	cols := append([]table.Column{}, statsColumns...)
 	keys := append([]string{}, statsColKeys...)
@@ -433,8 +705,7 @@ func statsColumnsForWidth(w int) ([]table.Column, []string) {
 	for _, c := range cols {
 		total += c.Width + 1
 	}
-	// Drop columns from the least-critical end until we fit.
-	dropOrder := []string{"ago", "p50", "checks", "p95"}
+	dropOrder := []string{"ago", "checks"}
 	for _, drop := range dropOrder {
 		if total <= w {
 			break
@@ -448,7 +719,6 @@ func statsColumnsForWidth(w int) ([]table.Column, []string) {
 			}
 		}
 	}
-	// Shrink name to absorb any remaining overflow.
 	if total > w && len(cols) > 0 {
 		excess := total - w
 		cols[0].Width -= excess
@@ -472,6 +742,40 @@ func statsColumnAt(x int, cols []table.Column) int {
 		pos += c.Width + 1
 	}
 	return -1
+}
+
+func compactStatsNameWidth(w int) int {
+	nameW := w - 18
+	if nameW > 12 {
+		nameW = 12
+	}
+	if nameW < 7 {
+		nameW = 7
+	}
+	return nameW
+}
+
+func compactStatsColumnAt(x, w int) (string, bool) {
+	if x < 0 {
+		return "", false
+	}
+	nameW := compactStatsNameWidth(w)
+	ranges := []struct {
+		key        string
+		start, end int
+	}{
+		{"name", 0, nameW},
+		{"ok%", nameW + 1, nameW + 4},
+		{"p50", nameW + 5, nameW + 8},
+		{"p95", nameW + 9, nameW + 12},
+		{"down", nameW + 13, nameW + 14},
+	}
+	for _, r := range ranges {
+		if x >= r.start && x < r.end {
+			return r.key, true
+		}
+	}
+	return "", false
 }
 
 func (m model) statsRows() []statsRow {
@@ -679,11 +983,66 @@ func (m model) statsTable(w, h int) (table.Model, bool) {
 }
 
 func (m model) renderStatsPane(w, h int, compact bool) string {
+	rows := m.statsRows()
+	if len(rows) == 0 {
+		return m.emptyHint("no data yet —", "c", "heck to start measuring")
+	}
+	if w < 50 {
+		return m.renderStatsCompact(rows, w, h)
+	}
 	t, ok := m.statsTable(w, h)
 	if !ok {
 		return m.emptyHint("no data yet —", "c", "heck to start measuring")
 	}
 	return t.View()
+}
+
+func (m model) renderStatsCompact(rows []statsRow, w, h int) string {
+	chrome := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelStats))).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	nameW := compactStatsNameWidth(w)
+	totalChecks, totalDown, okSum := 0, 0, 0
+	for _, r := range rows {
+		totalChecks += r.checks
+		totalDown += r.down
+		okSum += r.okPct
+	}
+	avgOK := 0
+	if len(rows) > 0 {
+		avgOK = okSum / len(rows)
+	}
+	header := fmt.Sprintf("%-*s %3s %3s %3s %s", nameW, "name", "ok", "p50", "p95", "↓")
+	lines := []string{
+		fmt.Sprintf("%s %s  %s  %s",
+			dim.Render("stats"),
+			chrome.Render(fmt.Sprintf("%d checks", totalChecks)),
+			dim.Render(fmt.Sprintf("avg ok %d%%", avgOK)),
+			dim.Render(fmt.Sprintf("down %d", totalDown))),
+		chrome.Render(header),
+	}
+	for i, r := range rows {
+		okPct := fmt.Sprintf("%d%%", r.okPct)
+		if !theme.IsMono(m.palette) {
+			c := m.palette[theme.Err]
+			if r.okPct >= 95 {
+				c = m.palette[theme.OK]
+			} else if r.okPct >= 70 {
+				c = m.palette[theme.Warn]
+			}
+			okPct = lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render(okPct)
+		}
+		line := fmt.Sprintf("%-*s %3s %3.0f %3.0f %d", nameW, truncate(r.name, nameW), okPct, r.p50, r.p95, r.down)
+		if i == m.sel[panelStats] && m.focused == panelStats {
+			line = lipgloss.NewStyle().
+				Background(lipgloss.Color(m.palette[theme.SelectedBg])).
+				Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
+				Render(line)
+		} else if r.isFav {
+			line = dim.Render(line)
+		}
+		lines = append(lines, line)
+	}
+	return renderScrollable(lines, m.scroll[panelStats], h, m.palette)
 }
 
 // percentile returns the p-th percentile of ring.

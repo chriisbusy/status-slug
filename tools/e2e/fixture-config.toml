@@ -1,61 +1,61 @@
 version = 1
 
 [settings]
-theme                = "sstop"
+theme = "sstop"
 probe_timeout_seconds = 3
-auto_refresh_seconds  = 0
-probe_mode           = "models"
-history_length       = 60
-keys_source          = "auto"
-nerd_font            = false
-confirm_quit         = false
-check_on_launch      = false
-alert_bell           = false
-border_style         = "rounded"
-graph_glyphs         = "braille"
+auto_refresh_seconds = 0
+probe_mode = "models"
+history_length = 60
+keys_source = "auto"
+nerd_font = false
+confirm_quit = false
+check_on_launch = false
+alert_bell = false
+border_style = "rounded"
+graph_glyphs = "braille"
 
 [[providers]]
-name     = "MockOK"
-label    = "custom"
-kind     = "openai-compatible"
+name = "MockOK"
+label = "custom"
+kind = "openai-compatible"
 base_url = "http://127.0.0.1:18821/ok/v1"
-key_ref  = "none"
-enabled  = true
+key_ref = "none"
+enabled = true
 [[providers.models]]
-id        = "mock-alpha"
+id = "mock-alpha"
 favourite = true
-probe     = "chat"
+probe = "chat"
 
 [[providers]]
-name     = "MockBilling"
-label    = "custom"
-kind     = "openai-compatible"
+name = "MockBilling"
+label = "custom"
+kind = "openai-compatible"
 base_url = "http://127.0.0.1:18821/billing/v1"
-key_ref  = "none"
-enabled  = true
+key_ref = "none"
+enabled = true
 
 [[providers]]
-name     = "MockDown"
-label    = "custom"
-kind     = "openai-compatible"
+name = "MockDown"
+label = "custom"
+kind = "openai-compatible"
 base_url = "http://127.0.0.1:18821/down/v1"
-key_ref  = "none"
-enabled  = true
+key_ref = "none"
+enabled = true
 
 [[providers]]
 # Neuralwatt: proves the custom/non-mainstream path (custom kind, manual meter).
 # Disabled: not probed (meter assertions still work from state; tmux count stays ●1 ◐1 ○1).
-name     = "Neuralwatt"
-label    = "custom"
-kind     = "custom"
+name = "Neuralwatt"
+label = "custom"
+kind = "custom"
 base_url = "http://127.0.0.1:18821/custom/v1"
-key_ref  = "none"
-enabled  = false
-note     = "test custom provider"
+key_ref = "none"
+enabled = false
+note = "test custom provider"
 [[providers.meters]]
-name  = "Energy"
-unit  = "kWh"
-kind  = "manual"
-used  = 0.0
-cap   = 1000.0
+name = "Energy"
+unit = "kWh"
+kind = "manual"
+used = 231.5
+cap = 1000.0
 reset = "monthly:1"

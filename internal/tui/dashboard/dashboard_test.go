@@ -163,6 +163,23 @@ func TestRenderStatusPane(t *testing.T) {
 	}
 }
 
+func TestStatusPaneShowsHierarchyAndReadableReasons(t *testing.T) {
+	m := newTestModel()
+	got := ansi.Strip(m.renderStatusPane(90, 20, false))
+	for _, want := range []string{
+		"fleet",
+		"live endpoint card",
+		"latency",
+		"account/auth problem",
+		"network timeout",
+		"disabled · skipped by probes",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status pane missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderStatusPaneEmpty(t *testing.T) {
 	m := newTestModel()
 	m.cfg.Providers = nil
@@ -183,6 +200,22 @@ func TestUsagePaneShowsDisabledProviderMeter(t *testing.T) {
 	}
 	if !strings.Contains(got, "kWh") {
 		t.Error("meter unit missing")
+	}
+}
+
+func TestUsagePaneShowsMeterSummaryAndBar(t *testing.T) {
+	m := newTestModel()
+	got := ansi.Strip(m.renderUsagePane(80, 30, false))
+	for _, want := range []string{"meters", "manual 1", "auto 0", "231.5 / 1000 kWh", "23%"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("usage pane missing %q in:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "█") || !strings.Contains(got, "░") {
+		t.Errorf("usage pane should render filled and empty meter bar:\n%s", got)
+	}
+	if strings.Count(got, "no meters") > 3 {
+		t.Errorf("no-meter providers should be collapsed, got repeated noise:\n%s", got)
 	}
 }
 
@@ -270,6 +303,57 @@ func TestPercentile(t *testing.T) {
 	}
 }
 
+func TestSparkGlyphModesDiffer(t *testing.T) {
+	values := []float64{40, 95, 180, 130, 260, 115}
+	braille := Spark(values, 10, "braille")
+	blocks := Spark(values, 10, "blocks")
+	ascii := Spark(values, 10, "ascii")
+	if braille == blocks || braille == ascii || blocks == ascii {
+		t.Fatalf("glyph modes should differ: braille=%q blocks=%q ascii=%q", braille, blocks, ascii)
+	}
+}
+
+func TestFavouritesPaneShowsCockpitHistoryAndP95(t *testing.T) {
+	m := newTestModel()
+	now := time.Now()
+	for _, ms := range []float64{40, 95, 180, 130, 260, 115} {
+		m.st.RecordModelCheck("OKProv", "mock-alpha", state.CheckResult{Status: "ok", LatencyMs: ms, CheckedAt: now}, 60)
+	}
+	got := ansi.Strip(m.renderFavouritesPane(80, 20, false))
+	for _, want := range []string{"cockpit", "latency tape", "p95", "OKProv", "mock-alpha"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("favourites pane missing %q in:\n%s", want, got)
+		}
+	}
+	if !strings.ContainsAny(got, "⡀⣀⣤⣶⣿▁▂▃▄▅▆▇█.-=+*#%@") {
+		t.Errorf("favourites pane missing visible history glyphs:\n%s", got)
+	}
+}
+
+func TestStatsColumnsKeepPercentilesAtDefaultRightWidth(t *testing.T) {
+	cols, keys := statsColumnsForWidth(38)
+	_ = cols
+	present := map[string]bool{}
+	for _, k := range keys {
+		present[k] = true
+	}
+	for _, want := range []string{"p50", "p95", "down", "ok%"} {
+		if !present[want] {
+			t.Errorf("stats column %q should survive default narrow width; keys=%v", want, keys)
+		}
+	}
+}
+
+func TestStatsPaneCompactRenderShowsPercentiles(t *testing.T) {
+	m := newTestModel()
+	got := ansi.Strip(m.renderStatsPane(38, 10, false))
+	for _, want := range []string{"p50", "p95", "↓", "OKProv"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("compact stats pane missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // TestPercentileUnsorted: percentile must sort internally — an unsorted ring
 // is the normal case (rings are append-ordered by time, not magnitude).
 func TestPercentileUnsorted(t *testing.T) {
@@ -349,6 +433,81 @@ func TestRenderScrollable(t *testing.T) {
 	got = renderScrollable(lines, 100, 3, pal)
 	if !strings.Contains(got, "e") {
 		t.Errorf("scrollable clamp: %q", got)
+	}
+}
+
+func TestHeaderClickRegionsOpenMenu(t *testing.T) {
+	m := newTestModel()
+	_, regions := m.headerRows()
+	var menu hitRegion
+	for _, r := range regions {
+		if r.kind == "menu" {
+			menu = r
+			break
+		}
+	}
+	if menu.w == 0 {
+		t.Fatalf("menu header region missing: %+v", regions)
+	}
+	next, _ := m.handleClick(tea.Mouse{X: menu.x, Y: menu.y, Button: tea.MouseLeft})
+	got := next.(model)
+	if got.ov.kind != overlayMenu {
+		t.Fatalf("menu header click did not open menu: %+v", got.ov)
+	}
+}
+
+func TestFavouritesPaneRowsFitNarrowWidths(t *testing.T) {
+	m := newTestModel()
+	for _, w := range []int{45, 55, 67} {
+		got := ansi.Strip(m.renderFavouritesPane(w, 20, false))
+		for i, line := range strings.Split(got, "\n") {
+			if width := ansi.StringWidth(line); width > w {
+				t.Fatalf("width %d line %d overflows: got %d cells in %q", w, i, width, line)
+			}
+		}
+	}
+}
+
+func TestCompactStatsHeaderClickSortsRenderedColumn(t *testing.T) {
+	m := newTestModel()
+	m.zoomed = true
+	m.focused = panelStats
+	m.width = 51 // total pane width: inner width 49, so renderStatsPane uses compact layout.
+	m.height = 20
+	innerW := m.width - 2
+	x := 1 + compactStatsNameWidth(innerW) + 9 // p95 header start in compact layout.
+	next, _ := m.handleClick(tea.Mouse{X: x, Y: 4, Button: tea.MouseLeft})
+	got := next.(model)
+	if got.prefs.statsSort != "p95" {
+		t.Fatalf("compact stats click sorted %q, want p95", got.prefs.statsSort)
+	}
+}
+
+func TestStatsHeaderClickUsesFullLayoutAtBoundaryWidth(t *testing.T) {
+	m := newTestModel()
+	m.zoomed = true
+	m.focused = panelStats
+	m.width = 52 // total pane width: inner width 50, so renderStatsPane uses the full table.
+	m.height = 20
+	cols, keys := statsColumnsForWidth(m.width - 2)
+	p95Start := 0
+	for i, key := range keys {
+		if key == "p95" {
+			break
+		}
+		p95Start += cols[i].Width + 1
+	}
+	next, _ := m.handleClick(tea.Mouse{X: 1 + p95Start, Y: 3, Button: tea.MouseLeft})
+	got := next.(model)
+	if got.prefs.statsSort != "p95" {
+		t.Fatalf("boundary full stats click sorted %q, want p95", got.prefs.statsSort)
+	}
+}
+
+func TestStatusReasonSummaryDoesNotTreatEveryFiveAsServerFailure(t *testing.T) {
+	got := statusReasonSummary("down", "connection refused to 10.0.0.5", "custom", "http://10.0.0.5")
+	if strings.Contains(got, "provider/server failure") {
+		t.Fatalf("digit 5 in address should not become server failure: %q", got)
 	}
 }
 

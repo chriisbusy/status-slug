@@ -1,8 +1,10 @@
 package wizard_test
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/chriisbusy/status-slug/internal/config"
 	"github.com/chriisbusy/status-slug/internal/tui/wizard"
 )
@@ -141,5 +143,21 @@ func TestBuildProvider(t *testing.T) {
 	}
 	if len(p.Meters) != 1 || p.Meters[0].Name != "Spend" {
 		t.Errorf("meters: %+v", p.Meters)
+	}
+}
+
+func TestWizardContentShowsDesignedModalHeader(t *testing.T) {
+	m := wizard.New(config.Default(), "")
+	got := ansi.Strip(m.Content())
+	for _, want := range []string{
+		"now provider",
+		"◐ provider",
+		"WELCOME · first provider",
+		"flight plan",
+		"click focuses fields",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("wizard header missing %q in:\n%s", want, got)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,6 +18,7 @@ func main() {
 		addr = ":18821"
 	}
 	mux := http.NewServeMux()
+	var okChatCount int64
 
 	// /ok — healthy provider: models list + chat completions.
 	mux.HandleFunc("/ok/v1/models", func(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +31,9 @@ func main() {
 		})
 	})
 	mux.HandleFunc("/ok/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&okChatCount, 1)
+		delays := []time.Duration{40, 95, 180, 130, 260, 115}
+		time.Sleep(delays[int(n-1)%len(delays)] * time.Millisecond)
 		writeJSON(w, 200, map[string]any{
 			"id":      "chatcmpl-mock",
 			"object":  "chat.completion",

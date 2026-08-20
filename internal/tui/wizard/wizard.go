@@ -6,6 +6,7 @@ package wizard
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -383,30 +384,49 @@ func (m Model) header() string {
 	if stepIdx > len(stepNames)-1 {
 		stepIdx = len(stepNames) - 1
 	}
-	dots := ""
+	stepTitle := stepNames[stepIdx]
+	stepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).Bold(true)
+	futureStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	key := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).Bold(true)
+
+	var rail []string
 	for i, n := range stepNames {
 		mark := "○"
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+		style := futureStyle
 		if i < stepIdx {
 			mark = "●"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK]))
+			style = doneStyle
 		} else if i == stepIdx {
 			mark = "◐"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent]))
+			style = stepStyle
 		}
-		dots += style.Render(mark+" "+n) + "  "
+		rail = append(rail, style.Render(mark+" "+n))
 	}
-	mode := "add another provider"
+	mode := "ADD PROVIDER"
+	modeDetail := "source + key + models + meters"
 	if m.data.providerCount == 0 {
-		mode = "welcome — add your first provider"
+		mode = "WELCOME"
+		modeDetail = "first provider"
 	}
 	if m.reconfigure != "" {
-		mode = "edit " + m.reconfigure
+		mode = "EDIT " + m.reconfigure
+		modeDetail = "update provider"
 	}
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint]))
-	modeLine := hintStyle.Render(mode)
-	hint := hintStyle.Render("tab next · shift+tab back · enter accept · esc abort · click works too")
-	return art + "\n\n" + dots + "\n" + modeLine + "\n" + hint + "\n"
+	modeLine := title.Render(mode) + muted.Render(" · ") + muted.Render(modeDetail)
+	current := muted.Render("now ") + stepStyle.Render(stepTitle)
+	if m.data.name != "" {
+		current += muted.Render(" · provider ") + title.Render(m.data.name)
+	}
+	progress := muted.Render("flight plan ") + strings.Join(rail, muted.Render(" ━ "))
+	hint := key.Render("tab") + muted.Render(" next · ") +
+		key.Render("shift+tab") + muted.Render(" back · ") +
+		key.Render("enter") + muted.Render(" accept · ") +
+		key.Render("esc") + muted.Render(" abort · ") +
+		key.Render("click") + muted.Render(" focuses fields")
+	return art + "\n\n" + modeLine + "\n" + current + "\n" + progress + "\n" + hint + "\n"
 }
 
 // Content renders the wizard as an embeddable string.
