@@ -21,6 +21,18 @@ func TestBuiltinDistinct(t *testing.T) {
 	}
 }
 
+func TestSstopPaneChromeDoesNotBorrowSeverityRoles(t *testing.T) {
+	p, _ := theme.Load("sstop", "")
+	severity := map[string]bool{
+		p[theme.OK]: true, p[theme.Warn]: true, p[theme.Err]: true,
+	}
+	for _, role := range []theme.Role{theme.PaneStatus, theme.PaneUsage, theme.PaneFavourites, theme.PaneStats} {
+		if severity[p[role]] {
+			t.Errorf("%s borrows severity color %q", role, p[role])
+		}
+	}
+}
+
 func TestMonoIsMono(t *testing.T) {
 	p, _ := theme.Load("mono", "")
 	if !theme.IsMono(p) {
@@ -75,6 +87,38 @@ func TestUnknownThemeFallsBackToSstop(t *testing.T) {
 		if p[r] != sstop[r] {
 			t.Errorf("role %s: got %q want sstop %q", r, p[r], sstop[r])
 		}
+	}
+}
+
+func TestLightTerminalUsesLatte(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	p, warns := theme.LoadForTerminal(config.Settings{Theme: "sstop"}, false)
+	latte, _ := theme.Load("latte", "")
+	if len(warns) == 0 {
+		t.Fatal("expected light-terminal warning")
+	}
+	if p[theme.Fg] != latte[theme.Fg] {
+		t.Errorf("light terminal fg: got %q want latte %q", p[theme.Fg], latte[theme.Fg])
+	}
+}
+
+func TestLightTerminalKeepsUserTheme(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	dir := t.TempDir()
+	t.Setenv("SSLUG_CONFIG_HOME", dir)
+	themes := filepath.Join(dir, "themes")
+	if err := os.MkdirAll(themes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(themes, "paper.theme"), []byte("fg = \"#101010\"\nok = \"#008800\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, warns := theme.LoadForTerminal(config.Settings{Theme: "paper"}, false)
+	if len(warns) != 0 {
+		t.Fatalf("unexpected warnings: %v", warns)
+	}
+	if p[theme.Fg] != "#101010" {
+		t.Fatalf("custom light theme was not honored: %+v", p)
 	}
 }
 

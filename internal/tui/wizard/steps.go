@@ -62,7 +62,7 @@ func (m *Model) enterIdentity() {
 	}
 
 	presetF := widgets.NewSelect(m.palette, "which preset?", presetOpts)
-	presetF.Hint = "presets fill in the endpoint and auth style; custom works with any openai-compatible api"
+	presetF.Hint = "presets fill in the auth style; base/probe URLs stay editable for gateways and regional endpoints"
 	for i, p := range provider.Presets {
 		if p.Kind == d.kind && p.BaseURL == d.baseURL {
 			presetF.Selected = i
@@ -72,23 +72,44 @@ func (m *Model) enterIdentity() {
 		presetF.Selected = len(presetOpts) - 1
 	}
 
-	fields := []widgets.Field{
-		widgets.NewNote(m.palette, "welcome to sslug",
-			"let's add your first provider. pick a preset or go fully custom — sslug watches anything that speaks http."),
-		nameF, labelF, presetF,
-	}
-
-	var urlF *widgets.TextField
-	if presetF.Value() == "Custom" {
-		urlF = widgets.NewText(m.palette, "base url", "https://…")
-		urlF.Value = d.baseURL
-		urlF.Validate = func(s string) error {
-			if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
-				return fmt.Errorf("must start with http:// or https://")
-			}
+	urlF := widgets.NewText(m.palette, "base url", "leave blank for preset default; custom requires http(s)://…")
+	urlF.Value = d.baseURL
+	urlF.Validate = func(s string) error {
+		s = strings.TrimSpace(s)
+		if s == "" && presetF.Value() != "Custom" {
 			return nil
 		}
-		fields = append(fields, urlF)
+		if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+			return fmt.Errorf("must start with http:// or https://")
+		}
+		return nil
+	}
+	probeF := widgets.NewText(m.palette, "probe url", "optional GET health check; blank uses provider default")
+	probeF.Value = d.probeURL
+	probeF.Validate = func(s string) error {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+			return fmt.Errorf("must start with http:// or https://")
+		}
+		return nil
+	}
+	modeF := widgets.NewSelect(m.palette, "probe mode override", []string{"default", "models", "chat"})
+	modeKeys := []string{"", "models", "chat"}
+	for i, k := range modeKeys {
+		if k == d.probeMode {
+			modeF.Selected = i
+		}
+	}
+	noteF := widgets.NewText(m.palette, "note", "optional plan/rate hint shown in usage")
+	noteF.Value = d.note
+
+	fields := []widgets.Field{
+		widgets.NewNote(m.palette, "welcome to sslug",
+			"pick a preset, then override URLs when a gateway, proxy, or region needs it. custom speaks openai-compatible by default."),
+		nameF, labelF, presetF, urlF, probeF, modeF, noteF,
 	}
 
 	m.form = widgets.NewForm(m.palette, "", "", fields...)
@@ -96,16 +117,19 @@ func (m *Model) enterIdentity() {
 		d.name = strings.TrimSpace(nameF.Value)
 		d.label = labelKeys[labelF.Selected]
 		d.presetSel = presetF.Value()
-		if urlF != nil {
-			d.baseURL = urlF.Value
-		}
+		d.baseURL = strings.TrimSpace(urlF.Value)
+		d.probeURL = strings.TrimSpace(probeF.Value)
+		d.probeMode = modeKeys[modeF.Selected]
+		d.note = strings.TrimSpace(noteF.Value)
 	}
 	m.pendingDone = func() {
 		if d.presetSel == "Custom" {
 			d.kind = "custom"
 		} else if p := provider.FindPreset(d.presetSel); p != nil {
 			d.kind = p.Kind
-			d.baseURL = p.BaseURL
+			if d.baseURL == "" {
+				d.baseURL = p.BaseURL
+			}
 		}
 		m.gotoStep = stepKeySource
 	}
@@ -122,7 +146,25 @@ func (m *Model) enterKeySource() (tea.Model, tea.Cmd) {
 		"read it from a file…",
 	}
 	srcKeys := []string{"paste", "locate"}
+	detected := map[string]bool{}
 	for _, v := range DetectEnvVars(os.Environ()) {
+		detected[v] = true
+	}
+	used := map[string]bool{}
+	for _, v := range EnvCandidatesForProvider(d.name, d.presetSel, d.kind, d.baseURL) {
+		label := "use $" + v + " (likely match"
+		if detected[v] {
+			label += ", detected"
+		}
+		label += ")"
+		srcOpts = append(srcOpts, label)
+		srcKeys = append(srcKeys, "env:"+v)
+		used[v] = true
+	}
+	for _, v := range DetectEnvVars(os.Environ()) {
+		if used[v] {
+			continue
+		}
 		srcOpts = append(srcOpts, "use $"+v+" (detected)")
 		srcKeys = append(srcKeys, "env:"+v)
 	}
@@ -186,7 +228,7 @@ func (m *Model) enterKeyDetail() (tea.Model, tea.Cmd) {
 		"keep it in an env var instead",
 		"abort",
 	})
-	envF := widgets.NewText(m.palette, "environment variable name", "MY_PROVIDER_API_KEY")
+	envF := widgets.NewText(m.palette, "environment variable name", defaultEnvName(d))
 
 	switch {
 	case d.keySrc == "paste" && !needFallback && dest != "env":
@@ -430,10 +472,12 @@ func (m *Model) enterMeters() (tea.Model, tea.Cmd) {
 	}
 	m.pendingDone = func() {
 		if d.attachCredits {
-			d.meters = append(d.meters, config.Meter{
+			d.meters = upsertAutoMeter(d.meters, config.Meter{
 				Name: "Credits", Unit: "USD", Kind: "auto",
 				Auto: "openrouter-credits", Reset: "never",
 			})
+		} else {
+			d.meters = removeAutoMeter(d.meters, "openrouter-credits")
 		}
 		if d.addMeter {
 			d.meterDraft = meterDraft{unit: "USD", resetKind: "never"}
@@ -443,6 +487,28 @@ func (m *Model) enterMeters() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func upsertAutoMeter(meters []config.Meter, meter config.Meter) []config.Meter {
+	out := append([]config.Meter(nil), meters...)
+	for i := range out {
+		if out[i].Kind == "auto" && out[i].Auto == meter.Auto {
+			out[i] = meter
+			return out
+		}
+	}
+	return append(out, meter)
+}
+
+func removeAutoMeter(meters []config.Meter, auto string) []config.Meter {
+	out := make([]config.Meter, 0, len(meters))
+	for _, meter := range meters {
+		if meter.Kind == "auto" && meter.Auto == auto {
+			continue
+		}
+		out = append(out, meter)
+	}
+	return out
 }
 
 // enterMeterForm runs one meter definition; loops while the user keeps adding.
@@ -525,6 +591,15 @@ func (m *Model) enterSummary() (tea.Model, tea.Cmd) {
 	fmt.Fprintf(&b, "  %-10s %s\n", "kind", d.kind)
 	fmt.Fprintf(&b, "  %-10s %s\n", "endpoint", d.baseURL)
 	fmt.Fprintf(&b, "  %-10s %s\n", "key", secret.Redact(d.keyRef))
+	if d.probeURL != "" {
+		fmt.Fprintf(&b, "  %-10s %s\n", "probe", d.probeURL)
+	}
+	if d.probeMode != "" {
+		fmt.Fprintf(&b, "  %-10s %s\n", "mode", d.probeMode)
+	}
+	if d.note != "" {
+		fmt.Fprintf(&b, "  %-10s %s\n", "note", d.note)
+	}
 	var favs []string
 	for _, mod := range d.models {
 		if mod.Favourite {
@@ -567,7 +642,7 @@ func (m *Model) save() error {
 			return fmt.Errorf("store key: %w", err)
 		}
 	}
-	p := BuildProvider(d.name, d.label, d.kind, d.baseURL, d.keyRef, d.note, d.models, d.meters)
+	p := BuildProvider(d.name, d.label, d.kind, d.baseURL, d.probeURL, d.probeMode, d.keyRef, d.note, d.models, d.meters)
 	m.cfg.Upsert(p)
 	return config.Save(m.cfg)
 }

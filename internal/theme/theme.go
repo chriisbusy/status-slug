@@ -39,6 +39,10 @@ const (
 	SelectedBg     Role = "selected_bg"
 	SelectedFg     Role = "selected_fg"
 	KeyHint        Role = "key_hint"
+	PaneStatus     Role = "pane_status"
+	PaneUsage      Role = "pane_usage"
+	PaneFavourites Role = "pane_favourites"
+	PaneStats      Role = "pane_stats"
 )
 
 // AllRoles is the canonical ordered role list.
@@ -50,6 +54,7 @@ var AllRoles = []Role{
 	SparkLo, SparkHi,
 	GradLo, GradHi,
 	SelectedBg, SelectedFg, KeyHint,
+	PaneStatus, PaneUsage, PaneFavourites, PaneStats,
 }
 
 // Palette maps every role to a #RRGGBB string.
@@ -86,6 +91,10 @@ var builtinSstop = Palette{
 	SelectedBg:     "8",
 	SelectedFg:     "15",
 	KeyHint:        "8",
+	PaneStatus:     "14",
+	PaneUsage:      "12",
+	PaneFavourites: "6",
+	PaneStats:      "4",
 }
 
 // mocha is the former default — Catppuccin-mocha-inspired, softer.
@@ -378,15 +387,11 @@ func IsMono(p Palette) bool {
 
 // NO_COLOR reports whether the environment forces mono output.
 func NO_COLOR() bool {
-	if _, ok := os.LookupEnv("NO_COLOR"); ok {
-		return true
-	}
-	term := os.Getenv("TERM")
-	return term == "dumb" || term == ""
+	return os.Getenv("NO_COLOR") != ""
 }
 
 // LoadFromSettings loads the theme named in settings, respecting NO_COLOR,
-// the terminal's background (light terminals get terminal-native mono so
+// the terminal's background (light terminals get the light latte builtin so
 // nothing renders invisible), and theme_background (bg role emptied when
 // false → terminal's own background shows through, btop-style).
 func LoadFromSettings(s config.Settings) (Palette, []Warning) {
@@ -398,15 +403,25 @@ func LoadForTerminal(s config.Settings, dark bool) (Palette, []Warning) {
 	if NO_COLOR() {
 		return clonePalette(builtinMono), nil
 	}
-	if !dark {
-		// Light terminal: dark-scheme colors are unreadable there; fall back
-		// to terminal-native mono rather than render invisible text.
-		p := clonePalette(builtinMono)
-		return p, []Warning{{Message: "light terminal detected — using terminal-native colors"}}
-	}
 	name := s.Theme
 	if name == "" {
 		name = "sstop"
+	}
+	if !dark && name != "latte" && name != "mono" {
+		if _, builtin := builtins[name]; !builtin {
+			if _, err := os.Stat(filepath.Join(config.ThemesDir(), name+".theme")); err == nil {
+				p, warns := Load(name, config.ThemesDir())
+				if !s.ThemeBackground {
+					p[Bg] = ""
+				}
+				return p, warns
+			}
+		}
+		p := clonePalette(builtinLatte)
+		if !s.ThemeBackground {
+			p[Bg] = ""
+		}
+		return p, []Warning{{Message: "light terminal detected — using latte theme"}}
 	}
 	p, warns := Load(name, config.ThemesDir())
 	if !s.ThemeBackground {

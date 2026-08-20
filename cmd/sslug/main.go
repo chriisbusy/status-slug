@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -259,26 +260,8 @@ func runCheck(args []string) {
 		})
 	}
 
-	// Fetch auto usage meters.
-	for _, p := range cfg.Providers {
-		if !p.Enabled {
-			continue
-		}
-		if *providerFlag != "" && p.Name != *providerFlag {
-			continue
-		}
-		for _, m := range p.Meters {
-			if m.Kind != "auto" || m.Auto == "" {
-				continue
-			}
-			key := resolveKey(p)
-			doer := check.NewDoer(timeout, key)
-			adapter := provider.New(p.Kind)
-			ur, err := adapter.FetchUsage(ctx, doer, p, m.Auto)
-			if err == nil && ur != nil {
-				st.SetMeter(p.Name, m.Name, ur.Value)
-			}
-		}
+	for _, u := range provider.RefreshAutoMeters(ctx, cfg, timeout, *providerFlag, resolveKey) {
+		st.SetMeter(u.Provider, u.Meter, u.Value)
 	}
 
 	if err := st.Save(); err != nil {
@@ -578,9 +561,50 @@ func runDoctor(_ []string) {
 		}
 	}
 
+	addr := cfg.Settings.ServeListen
+	if addr == "" {
+		addr = "127.0.0.1:19777"
+	}
+	if err := validateServeListen(addr); err != nil {
+		fmt.Printf("serve:     WARN  %s (%v)\n", addr, err)
+	} else {
+		fmt.Printf("serve:     OK    http://%s (/status.json, /usage.json)\n", addr)
+	}
+
+	var autoMeters int
+	for _, p := range cfg.Providers {
+		for _, m := range p.Meters {
+			if m.Kind != "auto" || m.Auto == "" {
+				continue
+			}
+			autoMeters++
+			if m.Auto == "openrouter-credits" && (!strings.Contains(p.BaseURL, "openrouter.ai") || p.Kind != "openai-compatible") {
+				fmt.Printf("meter %-14s WARN  %s is intended for OpenRouter\n", p.Name+"/"+m.Name+":", m.Auto)
+			} else {
+				fmt.Printf("meter %-14s OK    auto adapter %s\n", p.Name+"/"+m.Name+":", m.Auto)
+			}
+		}
+	}
+	fmt.Printf("moshi:     OK    %d auto meters; `sslug usage --format moshi`\n", autoMeters)
+
 	if failed {
 		os.Exit(1)
 	}
+}
+
+func validateServeListen(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if port == "" {
+		return fmt.Errorf("missing port")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("must be loopback")
+	}
+	return nil
 }
 
 // --- sslug config path ---

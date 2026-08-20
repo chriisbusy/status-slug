@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -261,6 +262,8 @@ func (m model) newMenuOverlay(p panelID) overlayState {
 			{"sort: last checked", "status.sort:checked"},
 			{fmt.Sprintf("group by label: %s", onOff(m.prefs.statusGroup)), "status.group"},
 			{"check selected", "status.check"},
+			{"edit selected provider", "status.edit"},
+			{fmt.Sprintf("%s selected provider", enableDisableLabel(m.selectedProvider())), "status.toggle-enabled"},
 			{"remove selected provider", "status.remove"},
 		}
 	case panelUsage:
@@ -357,6 +360,8 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 			return m.cycleTheme(), nil
 		case "view":
 			return m.cycleView(), nil
+		case "integrations":
+			m.ov = m.newIntegrationsOverlay()
 		case "help":
 			m.ov = m.newHelpOverlay()
 		case "quit":
@@ -373,6 +378,24 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 		if p := m.selectedProvider(); p != nil {
 			cmd := m.startCheckOne(*p)
 			return m, cmd
+		}
+	case action == "status.edit":
+		if p := m.selectedProvider(); p != nil {
+			m.openWizard(p.Name)
+			if m.wiz != nil {
+				return m, m.wiz.Init()
+			}
+		}
+	case action == "status.toggle-enabled":
+		if p := m.selectedProvider(); p != nil {
+			p.Enabled = !p.Enabled
+			if err := config.Save(m.cfg); err != nil {
+				m.footer = "save config: " + err.Error()
+			} else if p.Enabled {
+				m.footer = p.Name + " enabled"
+			} else {
+				m.footer = p.Name + " disabled"
+			}
 		}
 	case action == "status.remove":
 		if p := m.selectedProvider(); p != nil {
@@ -755,6 +778,9 @@ func (m model) newSettingsOverlay() overlayState {
 
 	keysF := widgets.NewSelect(m.palette, "keys source", []string{"auto", "keyring", "file", "env"})
 	selectIdx(keysF, []string{"auto", "keyring", "file", "env"}, s.KeysSource)
+	serveF := widgets.NewText(m.palette, "serve listen", "127.0.0.1:19777")
+	serveF.Value = s.ServeListen
+	serveF.Validate = validateLoopbackListen
 
 	nerdF := widgets.NewConfirm(m.palette, "nerd font glyphs", s.NerdFont)
 	quitF := widgets.NewConfirm(m.palette, "confirm quit", s.ConfirmQuit)
@@ -778,6 +804,8 @@ func (m model) newSettingsOverlay() overlayState {
 		themeF, viewF, arrF, compactF, splitF, borderF, glyphF, bgF,
 		widgets.NewNote(m.palette, "probing", "timeouts, refresh, key storage"),
 		timeoutF, refreshF, modeF, histF, keysF,
+		widgets.NewNote(m.palette, "integrations", "loopback api for moshi, tmux, scripts"),
+		serveF,
 		widgets.NewNote(m.palette, "behavior & panels", "toggles and pane visibility"),
 		nerdF, quitF, launchF, bellF, pStatusF, pUsageF, pFavF, pStatsF,
 	}
@@ -790,8 +818,8 @@ func (m model) newSettingsOverlay() overlayState {
 			"theme": themeF, "view": viewF, "arrangement": arrF, "compact": compactF,
 			"split": splitF, "border": borderF, "glyphs": glyphF, "themeBackground": bgF,
 			"timeout": timeoutF, "refresh": refreshF, "mode": modeF, "history": histF,
-			"keys": keysF, "nerd": nerdF, "confirmQuit": quitF, "checkOnLaunch": launchF,
-			"alertBell":    bellF,
+			"keys": keysF, "serveListen": serveF, "nerd": nerdF, "confirmQuit": quitF,
+			"checkOnLaunch": launchF, "alertBell": bellF,
 			"panel:status": pStatusF, "panel:usage": pUsageF,
 			"panel:favourites": pFavF, "panel:stats": pStatsF,
 		},
@@ -814,6 +842,22 @@ func intRange(lo, hi int) func(string) error {
 		}
 		return nil
 	}
+}
+
+func validateLoopbackListen(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(s)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("must be loopback")
+	}
+	return nil
 }
 
 func (m model) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -871,6 +915,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		s.CheckOnLaunch = getb("checkOnLaunch")
 		s.AlertBell = getb("alertBell")
 		s.ThemeBackground = getb("themeBackground")
+		s.ServeListen = strings.TrimSpace(get("serveListen"))
 
 		// Apply view changes: materialize into user views if builtin.
 		viewName := get("view")
@@ -963,6 +1008,55 @@ func (m *model) upsertUserView(v config.View) {
 		}
 	}
 	m.cfg.Views = append(m.cfg.Views, v)
+}
+
+func enableDisableLabel(p *config.Provider) string {
+	if p != nil && p.Enabled {
+		return "disable"
+	}
+	return "enable"
+}
+
+func (m model) newIntegrationsOverlay() overlayState {
+	content := m.integrationsText()
+	rendered, err := glamour.Render(content, "dark")
+	if err != nil {
+		rendered = content
+	}
+	vp := viewport.New(viewport.WithWidth(m.overlayWidth()), viewport.WithHeight(m.overlayHeight()))
+	vp.SetContent(rendered)
+	return overlayState{kind: overlayViewport, title: "integrations", vp: vp}
+}
+
+func (m model) integrationsText() string {
+	addr := m.cfg.Settings.ServeListen
+	if addr == "" {
+		addr = "127.0.0.1:19777"
+	}
+	autoMeters := 0
+	for _, p := range m.cfg.Providers {
+		for _, mt := range p.Meters {
+			if mt.Kind == "auto" && mt.Auto != "" {
+				autoMeters++
+			}
+		}
+	}
+	return fmt.Sprintf(`# integrations
+
+Every dashboard snapshot is available to scripts and plugin surfaces.
+
+- Loopback HTTP: %s
+  - start with %s
+  - GET %s and %s
+- Moshi/iOS: %s emits moshi-hook usage snapshots.
+- tmux/status lines: %s gives compact dots.
+- JSON: %s prints the full status contract.
+- Doctor: %s checks config, keys, meters, and serve settings.
+
+Auto meters configured: %d
+`, "`"+addr+"`", "`sslug serve`", "`/status.json`", "`/usage.json`",
+		"`sslug usage --format moshi`", "`sslug status --format tmux`",
+		"`sslug status --format json`", "`sslug doctor`", autoMeters)
 }
 
 // --- help & inspect (glamour + viewport) ---
@@ -1137,6 +1231,7 @@ const helpMarkdown = `# sslug keys
 | s / u / f / t | pane menus |
 | p | cycle view presets |
 | e | cycle themes (live) |
+| g | integrations |
 | o | settings |
 | a | add provider |
 | r | edit provider (wizard popup) |
@@ -1144,6 +1239,13 @@ const helpMarkdown = `# sslug keys
 | z | zoom pane |
 | ? | this help |
 | q | quit |
+
+## integrations
+
+- sslug serve exposes GET /status.json and /usage.json on loopback.
+- sslug usage --format moshi emits moshi-hook usage snapshots.
+- sslug status --format tmux feeds status lines; --format json feeds scripts.
+- sslug doctor checks config, keys, meters, and integration settings.
 
 ## config
 

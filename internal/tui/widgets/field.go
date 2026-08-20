@@ -162,9 +162,7 @@ func (t *TextField) View(w int) string {
 			if i < len(runes) {
 				under = string(runes[i])
 			}
-			b.WriteString(lipgloss.NewStyle().
-				Background(lipgloss.Color("#FFFFFF")).Foreground(lipgloss.Color("#000000")).
-				Render(under))
+			b.WriteString(t.st.selBg.Render(under))
 			shown = true
 			continue
 		}
@@ -178,7 +176,7 @@ func (t *TextField) View(w int) string {
 		}
 	}
 	if t.focused && ci == len(runes) && !shown && t.blink%(2*blinkRate) < blinkRate {
-		b.WriteString(lipgloss.NewStyle().Background(lipgloss.Color("#FFFFFF")).Render(" "))
+		b.WriteString(t.st.selBg.Render(" "))
 	}
 	line := b.String()
 	if t.err != nil {
@@ -643,8 +641,7 @@ func (b *ButtonRow) View(w int) string {
 		text := " " + label + " "
 		style := b.st.muted
 		if b.focused && i == b.Selected {
-			style = lipgloss.NewStyle().
-				Background(lipgloss.Color("#FFFFFF")).Foreground(lipgloss.Color("#000000")).Bold(true)
+			style = b.st.selBg.Bold(true)
 		}
 		b.xpos = append(b.xpos, x)
 		out.WriteString(style.Render(text))

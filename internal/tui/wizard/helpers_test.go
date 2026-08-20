@@ -99,9 +99,24 @@ func TestDetectEnvVars(t *testing.T) {
 	}
 }
 
+func TestEnvCandidatesForProvider(t *testing.T) {
+	got := wizard.EnvCandidatesForProvider("OpenRouter", "OpenRouter", "openai-compatible", "https://openrouter.ai/api/v1")
+	if len(got) == 0 || got[0] != "OPENROUTER_API_KEY" {
+		t.Fatalf("OpenRouter candidate first: %v", got)
+	}
+	got = wizard.EnvCandidatesForProvider("Google Gemini", "Google Gemini", "google", "https://generativelanguage.googleapis.com")
+	found := map[string]bool{}
+	for _, v := range got {
+		found[v] = true
+	}
+	if !found["GEMINI_API_KEY"] || !found["GOOGLE_API_KEY"] {
+		t.Fatalf("Google candidates: %v", got)
+	}
+}
+
 func TestBuildProvider(t *testing.T) {
 	p := wizard.BuildProvider("Test", "official", "openai-compatible",
-		"https://api.example.com/v1/", "keyring:test", "my note",
+		"https://api.example.com/v1/", "https://health.example.com/ping/", "chat", "keyring:test", "my note",
 		[]config.Model{{ID: "m1", Favourite: true}},
 		[]config.Meter{{Name: "Spend", Unit: "USD", Kind: "manual"}},
 	)
@@ -111,6 +126,12 @@ func TestBuildProvider(t *testing.T) {
 	// Trailing slash stripped.
 	if p.BaseURL != "https://api.example.com/v1" {
 		t.Errorf("base_url: %q", p.BaseURL)
+	}
+	if p.ProbeURL != "https://health.example.com/ping" {
+		t.Errorf("probe_url: %q", p.ProbeURL)
+	}
+	if p.ProbeMode != "chat" {
+		t.Errorf("probe_mode: %q", p.ProbeMode)
 	}
 	if !p.Enabled {
 		t.Error("should be enabled")

@@ -33,6 +33,9 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 				return m, dashBlinkTick()
 			}
 			return m, nil
+		case "integrations":
+			m.ov = m.newIntegrationsOverlay()
+			return m, nil
 		case "help":
 			m.ov = m.newHelpOverlay()
 			return m, nil
@@ -42,6 +45,7 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 				{"settings", "main.settings"},
 				{"cycle theme", "main.theme"},
 				{"cycle view", "main.view"},
+				{"integrations", "main.integrations"},
 				{"help", "main.help"},
 				{"quit", "main.quit"},
 			}}

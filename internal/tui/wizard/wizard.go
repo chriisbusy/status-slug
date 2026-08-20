@@ -40,16 +40,16 @@ var stepNames = []string{"provider", "key", "verify", "models", "meters", "revie
 // wizardData carries answers across steps; heap-shared so model copies
 // always read the same state (the value-copy trap that ate keystrokes).
 type wizardData struct {
-	name, label, kind, baseURL string
-	keyRef, keyMaterial        string
-	note                       string
-	validation                 check.Result
-	discovered                 []string
-	fetchErr                   string
-	models                     []config.Model
-	meters                     []config.Meter
-	attachCredits              bool
-	providerCount              int
+	name, label, kind, baseURL               string
+	probeURL, probeMode, keyRef, keyMaterial string
+	note                                     string
+	validation                               check.Result
+	discovered                               []string
+	fetchErr                                 string
+	models                                   []config.Model
+	meters                                   []config.Meter
+	attachCredits                            bool
+	providerCount                            int
 
 	presetSel      string
 	keySrc         string
@@ -116,9 +116,17 @@ func New(cfg config.Config, reconfigure string) Model {
 			m.data.label = existing.Label
 			m.data.kind = existing.Kind
 			m.data.baseURL = existing.BaseURL
+			m.data.probeURL = existing.ProbeURL
+			m.data.probeMode = existing.ProbeMode
 			m.data.keyRef = existing.KeyRef
-			m.data.models = existing.Models
-			m.data.meters = existing.Meters
+			m.data.models = append([]config.Model(nil), existing.Models...)
+			m.data.meters = append([]config.Meter(nil), existing.Meters...)
+			for _, meter := range existing.Meters {
+				if meter.Kind == "auto" && meter.Auto == "openrouter-credits" {
+					m.data.attachCredits = true
+					break
+				}
+			}
 			m.data.note = existing.Note
 		}
 	}
@@ -388,9 +396,17 @@ func (m Model) header() string {
 		}
 		dots += style.Render(mark+" "+n) + "  "
 	}
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
-		Render("tab next · shift+tab back · enter accept · esc abort · click works too")
-	return art + "\n\n" + dots + "\n" + hint + "\n"
+	mode := "add another provider"
+	if m.data.providerCount == 0 {
+		mode = "welcome — add your first provider"
+	}
+	if m.reconfigure != "" {
+		mode = "edit " + m.reconfigure
+	}
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint]))
+	modeLine := hintStyle.Render(mode)
+	hint := hintStyle.Render("tab next · shift+tab back · enter accept · esc abort · click works too")
+	return art + "\n\n" + dots + "\n" + modeLine + "\n" + hint + "\n"
 }
 
 // Content renders the wizard as an embeddable string.

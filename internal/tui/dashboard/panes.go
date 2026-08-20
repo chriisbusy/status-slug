@@ -595,6 +595,25 @@ func (m *model) cycleStatsSort(col string) {
 	m.savePrefs()
 }
 
+func (m model) sortedColumns(cols []table.Column, keys []string) []table.Column {
+	out := append([]table.Column{}, cols...)
+	for i, k := range keys {
+		if k != m.prefs.statsSort {
+			continue
+		}
+		arrow := "↑"
+		if m.prefs.statsSortDir == 2 {
+			arrow = "↓"
+		}
+		title := ""
+		if out[i].Width > 1 {
+			title = truncate(out[i].Title, out[i].Width-1)
+		}
+		out[i].Title = title + arrow
+	}
+	return out
+}
+
 // statsTable builds the bubbles/table model for the stats pane.
 func (m model) statsTable(w, h int) (table.Model, bool) {
 	rows := m.statsRows()
@@ -645,7 +664,7 @@ func (m model) statsTable(w, h int) (table.Model, bool) {
 		Foreground(lipgloss.Color(m.palette[theme.Fg]))
 
 	t := table.New(
-		table.WithColumns(cols),
+		table.WithColumns(m.sortedColumns(cols, keys)),
 		table.WithRows(trs),
 		table.WithFocused(m.focused == panelStats),
 		table.WithHeight(h-1),

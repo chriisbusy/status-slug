@@ -60,18 +60,19 @@ func panelTitleSegs(p panelID) (before, key, after string) {
 // This matches btop's theme language: each panel owns a consistent section
 // color, while ok/warn/err remain semantic inside rows.
 func (m model) panelChrome(p panelID) string {
+	role := theme.PaneStatus
 	switch p {
-	case panelStatus:
-		return m.palette[theme.Accent]
 	case panelUsage:
-		return m.palette[theme.GradHi]
+		role = theme.PaneUsage
 	case panelFavourites:
-		return m.palette[theme.OK]
+		role = theme.PaneFavourites
 	case panelStats:
-		return m.palette[theme.Warn]
-	default:
-		return m.palette[theme.Accent]
+		role = theme.PaneStats
 	}
+	if c := m.palette[role]; c != "" {
+		return c
+	}
+	return m.palette[theme.Accent]
 }
 
 // styledTitle renders a panel heading using that panel's chrome color.
@@ -91,6 +92,9 @@ type checkResultMsg struct {
 	provider string
 	modelID  string
 	result   check.Result
+}
+type autoUsageMsg struct {
+	updates []provider.MeterUpdate
 }
 type tickMsg time.Time
 
@@ -378,6 +382,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case checkResultMsg:
 		return m.handleCheckResult(msg)
+	case autoUsageMsg:
+		return m.handleAutoUsage(msg)
 
 	case checkNowMsg:
 		cmd := m.startCheckAll()
@@ -483,12 +489,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = m.newHelpOverlay()
 	case "i":
 		m.ov = m.newInspectOverlay()
+	case "g":
+		m.ov = m.newIntegrationsOverlay()
 	case "m":
 		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
 			{"add provider", "main.add"},
 			{"settings", "main.settings"},
 			{"cycle theme", "main.theme"},
 			{"cycle view", "main.view"},
+			{"integrations", "main.integrations"},
 			{"help", "main.help"},
 			{"quit", "main.quit"},
 		}}
@@ -666,6 +675,16 @@ func (m *model) startCheckModel(p config.Provider, mod config.Model) tea.Cmd {
 	})
 }
 
+func cloneAutoMeterConfig(cfg config.Config) config.Config {
+	out := config.Config{Settings: cfg.Settings}
+	out.Providers = make([]config.Provider, len(cfg.Providers))
+	for i, p := range cfg.Providers {
+		out.Providers[i] = p
+		out.Providers[i].Meters = append([]config.Meter(nil), p.Meters...)
+	}
+	return out
+}
+
 // startChecks probes all enabled providers + favourites, or one provider if
 // only is non-empty. Pointer receiver: sets checking/pendingCount on the
 // real model so the spinner, quit guard, and re-check guard all work.
@@ -676,6 +695,7 @@ func (m *model) startChecks(only string) tea.Cmd {
 	m.checking = true
 
 	timeout := m.probeTimeout()
+	autoCfg := cloneAutoMeterConfig(m.cfg)
 	jobs := provider.BuildJobs(m.cfg, func(p config.Provider) string {
 		key, _ := secret.Resolve(p.KeyRef)
 		return key
@@ -709,7 +729,13 @@ func (m *model) startChecks(only string) tea.Cmd {
 		}
 		cmds = batched
 	}
-	cmds = append(cmds, m.spin.Tick)
+	cmds = append(cmds, m.spin.Tick, func() tea.Msg {
+		updates := provider.RefreshAutoMeters(context.Background(), autoCfg, timeout, only, func(p config.Provider) string {
+			key, _ := secret.Resolve(p.KeyRef)
+			return key
+		})
+		return autoUsageMsg{updates: updates}
+	})
 	return tea.Batch(cmds...)
 }
 
@@ -818,6 +844,16 @@ func (m model) handleCheckResult(msg checkResultMsg) (tea.Model, tea.Cmd) {
 		m.pendingCount = 0
 		m.checking = false
 		m.lastCheck = time.Now()
+	}
+	return m, m.syncBars()
+}
+
+func (m model) handleAutoUsage(msg autoUsageMsg) (tea.Model, tea.Cmd) {
+	for _, u := range msg.updates {
+		m.st.SetMeter(u.Provider, u.Meter, u.Value)
+	}
+	if len(msg.updates) > 0 {
+		_ = m.st.Save()
 	}
 	return m, m.syncBars()
 }
@@ -1260,6 +1296,7 @@ func (m model) renderHeader() string {
 		{accent.Render("[m]") + muted.Render("enu"), "menu"},
 		{accent.Render("[p]") + muted.Render("reset: "+m.activeViewDef().Name), "cycle-view"},
 		{muted.Render("th") + accent.Render("[e]") + muted.Render("me"), "theme"},
+		{accent.Render("[g]") + muted.Render("ateways"), "integrations"},
 		checkBtn,
 		{accent.Render("[o]") + muted.Render("ptions"), "settings"},
 		{accent.Render("[?]"), "help"},
@@ -1326,6 +1363,7 @@ func (dashKeyMap) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "views")),
 		key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "theme")),
 		key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
+		key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "integrations")),
 		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
 		key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "menu")),
 		key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inspect")),

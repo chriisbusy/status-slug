@@ -1,4 +1,4 @@
-// Package wizard implements the huh/v2 setup wizard.
+// Package wizard implements the mouse-native setup wizard.
 // This file holds pure helpers separated from form plumbing.
 package wizard
 
@@ -94,17 +94,71 @@ func DetectEnvVars(environ []string) []string {
 	return out
 }
 
+// EnvCandidatesForProvider returns provider-specific key variable suggestions,
+// most-specific first. The names are suggestions only; callers decide whether
+// the variables are currently present.
+func EnvCandidatesForProvider(providerName, presetName, kind, baseURL string) []string {
+	hay := strings.ToUpper(providerName + " " + presetName + " " + kind + " " + baseURL)
+	var out []string
+	add := func(v string) {
+		for _, existing := range out {
+			if existing == v {
+				return
+			}
+		}
+		out = append(out, v)
+	}
+	switch {
+	case strings.Contains(hay, "OPENROUTER"):
+		add("OPENROUTER_API_KEY")
+	case strings.Contains(hay, "ANTHROPIC"):
+		add("ANTHROPIC_API_KEY")
+	case strings.Contains(hay, "GEMINI") || strings.Contains(hay, "GOOGLE"):
+		add("GEMINI_API_KEY")
+		add("GOOGLE_API_KEY")
+	case strings.Contains(hay, "GROQ"):
+		add("GROQ_API_KEY")
+	case strings.Contains(hay, "MISTRAL"):
+		add("MISTRAL_API_KEY")
+	case strings.Contains(hay, "DEEPSEEK"):
+		add("DEEPSEEK_API_KEY")
+	case strings.Contains(hay, "OPENAI"):
+		add("OPENAI_API_KEY")
+	}
+	slug := strings.ToUpper(providerName)
+	slug = strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, slug)
+	slug = strings.Trim(slug, "_")
+	if slug != "" {
+		add(slug + "_API_KEY")
+	}
+	return out
+}
+
+func defaultEnvName(d *wizardData) string {
+	if candidates := EnvCandidatesForProvider(d.name, d.presetSel, d.kind, d.baseURL); len(candidates) > 0 {
+		return candidates[0]
+	}
+	return "MY_PROVIDER_API_KEY"
+}
+
 // BuildProvider assembles a config.Provider from wizard step results.
-func BuildProvider(name, label, kind, baseURL, keyRef, note string, models []config.Model, meters []config.Meter) config.Provider {
+func BuildProvider(name, label, kind, baseURL, probeURL, probeMode, keyRef, note string, models []config.Model, meters []config.Meter) config.Provider {
 	return config.Provider{
-		Name:    name,
-		Label:   label,
-		Kind:    kind,
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		KeyRef:  keyRef,
-		Enabled: true,
-		Note:    note,
-		Models:  models,
-		Meters:  meters,
+		Name:      name,
+		Label:     label,
+		Kind:      kind,
+		BaseURL:   strings.TrimRight(baseURL, "/"),
+		ProbeURL:  strings.TrimRight(probeURL, "/"),
+		ProbeMode: probeMode,
+		KeyRef:    keyRef,
+		Enabled:   true,
+		Note:      note,
+		Models:    models,
+		Meters:    meters,
 	}
 }

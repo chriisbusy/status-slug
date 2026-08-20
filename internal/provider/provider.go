@@ -65,6 +65,42 @@ type UsageResult struct {
 	FetchedAt time.Time
 }
 
+// MeterUpdate is one freshly fetched auto meter value.
+type MeterUpdate struct {
+	Provider string
+	Meter    string
+	Value    float64
+}
+
+// RefreshAutoMeters fetches every configured auto meter for enabled providers.
+// Errors are intentionally non-fatal: provider checks remain the primary status
+// signal, and stale meters keep their last known value.
+func RefreshAutoMeters(ctx context.Context, cfg config.Config, timeout time.Duration, only string, resolveKey func(config.Provider) string) []MeterUpdate {
+	var updates []MeterUpdate
+	for _, p := range cfg.Providers {
+		if !p.Enabled {
+			continue
+		}
+		if only != "" && p.Name != only {
+			continue
+		}
+		for _, m := range p.Meters {
+			if m.Kind != "auto" || m.Auto == "" {
+				continue
+			}
+			key := resolveKey(p)
+			doer := check.NewDoer(timeout, key)
+			meterCtx, cancel := context.WithTimeout(ctx, timeout)
+			ur, err := New(p.Kind).FetchUsage(meterCtx, doer, p, m.Auto)
+			cancel()
+			if err == nil && ur != nil {
+				updates = append(updates, MeterUpdate{Provider: p.Name, Meter: m.Name, Value: ur.Value})
+			}
+		}
+	}
+	return updates
+}
+
 // New returns the Adapter for kind. Unknown kinds fall back to openai-compatible.
 func New(kind string) Adapter {
 	switch kind {
