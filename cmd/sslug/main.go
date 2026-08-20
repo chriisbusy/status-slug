@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/chriisbusy/status-slug/internal/check"
 	"github.com/chriisbusy/status-slug/internal/config"
@@ -158,12 +159,20 @@ func resolveKey(p config.Provider) string {
 
 func runDashboard(_ []string) {
 	// Dashboard handles first-run wizard popup itself (empty config).
+	if !term.IsTerminal(os.Stdout.Fd()) {
+		fmt.Fprintln(os.Stderr, "sslug: the dashboard needs a terminal — try `sslug status` or `sslug check --json` for scripted use")
+		os.Exit(1)
+	}
 	if err := dashboard.Run(); err != nil {
 		fatal("dashboard", err)
 	}
 }
 
 func runSetup(args []string) {
+	if !term.IsTerminal(os.Stdout.Fd()) {
+		fmt.Fprintln(os.Stderr, "sslug: the setup wizard needs a terminal — edit `sslug config path` directly for scripted provisioning")
+		os.Exit(1)
+	}
 	name := ""
 	if len(args) > 0 {
 		name = args[0]

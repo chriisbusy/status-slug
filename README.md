@@ -84,8 +84,9 @@ Four panes, all configurable; presets cycle with `p`:
 | **stats** | Checks / ok% / p50 / p95 / down counts per provider and favourite |
 
 Keys: `tab` cycle focus · `j/k` scroll · `c`/`⏎` check now · `i` inspect ·
-`s/u/f/t` pane menus · `p` view presets · `S` settings · `a` add provider
-(setup wizard popup) · `z` zoom pane · `?` help · `q` quit.
+`s/u/f/t` pane menus · `p` view presets · `T` cycle themes (live) ·
+`S` settings · `a` add provider (setup wizard popup) · `d` remove provider ·
+`z` zoom pane · `?` help · `q` quit.
 
 ## Usage meters
 

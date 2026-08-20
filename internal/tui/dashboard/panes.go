@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
@@ -133,7 +134,13 @@ func (m model) statusRow(p *config.Provider, selected bool, w int) string {
 		fmt.Sprintf("%7s", latency),
 		dim.Render(age))
 	if reason != "" && status != "ok" {
-		line += "  " + dim.Render(reason)
+		reasonStyle := dim
+		if status == "account" {
+			reasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn]))
+		} else if status == "down" {
+			reasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Err]))
+		}
+		line += "  " + reasonStyle.Render(reason)
 	}
 	if selected {
 		return lipgloss.NewStyle().
@@ -242,7 +249,7 @@ func (m model) meterLines(provName string, meter config.Meter, w int, compact bo
 	}
 	lines := []string{lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Fg])).Render(b.String())}
 
-	// Gradient cap bar via bubbles/progress (flat blocks in mono).
+	// Cap bar, colored by fill level like btop's meters: green → amber → red.
 	if meter.Cap > 0 && w > 10 {
 		pct := val / meter.Cap
 		if pct > 1 {
@@ -261,15 +268,24 @@ func (m model) meterLines(provName string, meter config.Meter, w int, compact bo
 			)
 		} else {
 			bar = progress.New(
-				progress.WithColors(
-					lipgloss.Color(m.palette[theme.GradLo]),
-					lipgloss.Color(m.palette[theme.GradHi]),
-				),
+				progress.WithColorFunc(func(total, current float64) color.Color {
+					ratio := current / total
+					switch {
+					case ratio >= 0.85:
+						return lipgloss.Color(m.palette[theme.Err])
+					case ratio >= 0.6:
+						return lipgloss.Color(m.palette[theme.Warn])
+					default:
+						return lipgloss.Color(m.palette[theme.OK])
+					}
+				}),
 				progress.WithWidth(barW),
 				progress.WithoutPercentage(),
 			)
 		}
-		lines = append(lines, "  "+bar.ViewAs(pct))
+		pctTxt := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
+			Render(fmt.Sprintf(" %.0f%%", pct*100))
+		lines = append(lines, "  "+bar.ViewAs(pct)+pctTxt)
 	}
 
 	// Reset line.
@@ -564,12 +580,23 @@ func (m model) statsTable(w, h int) (table.Model, bool) {
 
 	trs := make([]table.Row, len(rows))
 	for i, r := range rows {
+		// ok% colored by health like btop's meters: ≥95 green, ≥70 amber, else red.
+		okPctStr := fmt.Sprintf("%d%%", r.okPct)
+		if !theme.IsMono(m.palette) {
+			c := m.palette[theme.Err]
+			if r.okPct >= 95 {
+				c = m.palette[theme.OK]
+			} else if r.okPct >= 70 {
+				c = m.palette[theme.Warn]
+			}
+			okPctStr = lipgloss.NewStyle().Foreground(lipgloss.Color(c)).Render(okPctStr)
+		}
 		// Build the row in full-width key order, then project onto the
 		// responsive column set.
 		full := map[string]string{
 			"name":   truncate(r.name, cols[0].Width),
 			"checks": fmt.Sprintf("%d", r.checks),
-			"ok%":    fmt.Sprintf("%d%%", r.okPct),
+			"ok%":    okPctStr,
 			"p50":    fmt.Sprintf("%.0f", r.p50),
 			"p95":    fmt.Sprintf("%.0f", r.p95),
 			"down":   fmt.Sprintf("%d", r.down),

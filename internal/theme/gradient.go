@@ -77,11 +77,11 @@ var ArtLines = []string{
 }
 
 // Art renders the brand art with the palette gradient, with the
-// "sslug · status slug" wordmark beside the graphic in muted text.
+// "· status slug" wordmark beside the graphic in muted text.
 func Art(p Palette) string {
 	body := strings.Join(ArtLines, "\n")
 	painted := GradientText(body, p[GradLo], p[GradHi])
-	word := lipgloss.NewStyle().Foreground(lipgloss.Color(p[Muted])).Render("  sslug · status slug")
+	word := lipgloss.NewStyle().Foreground(lipgloss.Color(p[Muted])).Render("  · status slug")
 	lines := strings.Split(painted, "\n")
 	if len(lines) > 1 {
 		lines[1] += word

@@ -61,29 +61,29 @@ type Warning struct {
 }
 
 // Builtins.
-// sstop is the default: a 16-color ANSI theme mirroring btop's TTY theme.
-// Values are ANSI palette indices ("0"–"15"), so sslug draws from the
-// terminal's OWN palette exactly like btop does — the two always match,
-// whatever the terminal's theme. Bright black ("8") is the dim gray btop
-// uses for borders/inactive text; bright white for titles.
+// sstop is the default: btop's discipline — white/gray chrome, color reserved
+// for data. Interactive elements (bound keys, selectors, buttons) get bright
+// cyan; titles bright white; borders bright black; art sweeps cyan→blue.
+// Values are ANSI indices so sslug draws from the terminal's own palette,
+// exactly like btop's TTY theme — the two always match.
 var builtinSstop = Palette{
-	Bg:             "",   // terminal default, like btop TTY main_bg=-1
+	Bg:             "",   // terminal default
 	Fg:             "7",  // white
 	Muted:          "8",  // bright black — btop's dim gray
 	Title:          "15", // bright white
-	Accent:         "14", // bright cyan
+	Accent:         "14", // bright cyan — interactive elements only
 	BoxBorder:      "8",
-	BoxBorderFocus: "14",
-	OK:             "10", // bright green
-	Warn:           "11", // bright yellow
-	Err:            "9",  // bright red
+	BoxBorderFocus: "15", // focused box: bright white, not cyan
+	OK:             "10",
+	Warn:           "11",
+	Err:            "9",
 	Unknown:        "8",
-	BarFill:        "14",
+	BarFill:        "10", // bars start green…
 	BarEmpty:       "8",
 	SparkLo:        "8",
 	SparkHi:        "10",
-	GradLo:         "14",
-	GradHi:         "13", // bright magenta
+	GradLo:         "14", // cyan → blue sweep, no magenta
+	GradHi:         "12",
 	SelectedBg:     "8",
 	SelectedFg:     "15",
 	KeyHint:        "8",

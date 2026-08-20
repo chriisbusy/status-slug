@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chriisbusy/status-slug/internal/config"
 	"github.com/chriisbusy/status-slug/internal/state"
@@ -130,8 +131,8 @@ func TestHarness_EmptyConfigShowsNoProviders(t *testing.T) {
 func TestHarness_NarrowRendersStack(t *testing.T) {
 	m := harnessModel(t)
 	m.width, m.height = 80, 40 // <100 forces stack
-	frame := m.render()
-	if !strings.Contains(frame, "[s]tatus") || !strings.Contains(frame, "[t]stats") {
+	frame := ansi.Strip(m.render())
+	if !strings.Contains(frame, "[s]tatus") || !strings.Contains(frame, "s[t]ats") {
 		t.Error("stack render must include all panes")
 	}
 }

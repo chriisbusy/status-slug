@@ -654,6 +654,7 @@ func (m model) newSettingsOverlay() overlayState {
 		quitSel    = s.ConfirmQuit
 		launchSel  = s.CheckOnLaunch
 		bellSel    = s.AlertBell
+		bgSel      = s.ThemeBackground
 	)
 	if themeSel == "" {
 		themeSel = "sstop"
@@ -681,7 +682,8 @@ func (m model) newSettingsOverlay() overlayState {
 			huh.NewSelect[string]().Title("graph glyphs").Options(
 				huh.NewOption("braille", "braille"), huh.NewOption("blocks", "blocks"),
 				huh.NewOption("ascii", "ascii")).Value(&glyphSel),
-		),
+			huh.NewConfirm().Title("paint theme background").Value(&bgSel),
+		).Title("appearance — theme, layout, chrome"),
 		huh.NewGroup(
 			huh.NewInput().Title("probe timeout (5-30s)").Value(&timeoutIn).
 				Validate(intRange(5, 30)),
@@ -695,7 +697,7 @@ func (m model) newSettingsOverlay() overlayState {
 			huh.NewSelect[string]().Title("keys source").Options(
 				huh.NewOption("auto", "auto"), huh.NewOption("keyring", "keyring"),
 				huh.NewOption("file", "file"), huh.NewOption("env", "env")).Value(&keysSel),
-		),
+		).Title("probing — timeouts, refresh, storage"),
 		huh.NewGroup(
 			huh.NewConfirm().Title("nerd font glyphs").Value(&nerdSel),
 			huh.NewConfirm().Title("confirm quit").Value(&quitSel),
@@ -705,7 +707,7 @@ func (m model) newSettingsOverlay() overlayState {
 			huh.NewConfirm().Title("panel: usage").Value(mapBool(panelToggles, "usage")),
 			huh.NewConfirm().Title("panel: favourites").Value(mapBool(panelToggles, "favourites")),
 			huh.NewConfirm().Title("panel: stats").Value(mapBool(panelToggles, "stats")),
-		),
+		).Title("behavior & panels"),
 	).WithWidth(64).WithTheme(theme.HuhTheme(m.palette))
 
 	ov := overlayState{
@@ -722,7 +724,7 @@ func (m model) newSettingsOverlay() overlayState {
 	}
 	m.ovBoolFields = map[string]*bool{
 		"compact": &compactSel, "nerd": &nerdSel, "confirmQuit": &quitSel,
-		"checkOnLaunch": &launchSel, "alertBell": &bellSel,
+		"checkOnLaunch": &launchSel, "alertBell": &bellSel, "themeBackground": &bgSel,
 		"panel:status":     mapBool(panelToggles, "status"),
 		"panel:usage":      mapBool(panelToggles, "usage"),
 		"panel:favourites": mapBool(panelToggles, "favourites"),
@@ -793,6 +795,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		s.ConfirmQuit = getb("confirmQuit")
 		s.CheckOnLaunch = getb("checkOnLaunch")
 		s.AlertBell = getb("alertBell")
+		s.ThemeBackground = getb("themeBackground")
 
 		// Apply view changes: materialize into user views if builtin.
 		viewName := get("view")
@@ -1056,6 +1059,7 @@ const helpMarkdown = `# sslug keys
 | i | inspect selected row |
 | s / u / f / t | pane menus |
 | p | cycle view presets |
+| T | cycle themes (live) |
 | S | settings |
 | a | add provider (exits to wizard) |
 | d | remove selected provider |

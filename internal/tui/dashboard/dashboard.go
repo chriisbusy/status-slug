@@ -4,6 +4,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -36,17 +37,34 @@ const (
 
 var panelNames = [panelCount]string{"status", "usage", "favourites", "stats"}
 
-// panelBracket returns the heading marker per the plan's mockup:
-// [s]tatus, [u]sage, [f]avourites, [t]stats — the menu key replaces the
-// name's first letter when they match, prepends otherwise.
-func panelBracket(p panelID) string {
-	keys := [panelCount]string{"s", "u", "f", "t"}
-	name := panelNames[p]
-	k := keys[p]
-	if strings.HasPrefix(name, k) {
-		return "[" + k + "]" + name[len(k):]
+// panelTitleSegs decomposes a panel heading into (before, key, after) so the
+// bound key renders highlighted in place — btop's convention:
+// [s]tatus, [u]sage, [f]avourites, s[t]ats.
+func panelTitleSegs(p panelID) (before, key, after string) {
+	switch p {
+	case panelStatus:
+		return "", "s", "tatus"
+	case panelUsage:
+		return "", "u", "sage"
+	case panelFavourites:
+		return "", "f", "avourites"
+	case panelStats:
+		return "s", "t", "ats"
 	}
-	return "[" + k + "]" + name
+	return "", "", ""
+}
+
+// styledTitle renders a panel heading: bound key in accent (brackets kept),
+// the rest of the word in title color.
+func (m model) styledTitle(p panelID, extra string) string {
+	before, key, after := panelTitleSegs(p)
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title]))
+	out := title.Render(before) + accent.Render("["+key+"]") + title.Render(after)
+	if extra != "" {
+		out += title.Render(extra)
+	}
+	return out
 }
 
 // Messages.
@@ -438,6 +456,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = m.newMenuOverlay(panelStats)
 	case "p":
 		return m.cycleView(), nil
+	case "T":
+		return m.cycleTheme(), nil
 	case "S":
 		m.ov = m.newSettingsOverlay()
 		if m.ov.kind == overlayForm {
@@ -731,6 +751,43 @@ func (m model) viewByName(name string) *config.View {
 		}
 	}
 	return nil
+}
+
+// cycleTheme advances through builtin then user themes, live-swapping the
+// palette and persisting the choice to config.
+func (m model) cycleTheme() model {
+	names := theme.BuiltinNames()
+	if entries, err := os.ReadDir(config.ThemesDir()); err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".theme") {
+				names = append(names, strings.TrimSuffix(e.Name(), ".theme"))
+			}
+		}
+	}
+	cur := m.cfg.Settings.Theme
+	if cur == "" {
+		cur = "sstop"
+	}
+	next := names[0]
+	for i, n := range names {
+		if n == cur {
+			next = names[(i+1)%len(names)]
+			break
+		}
+	}
+	m.cfg.Settings.Theme = next
+	if err := config.Save(m.cfg); err != nil {
+		m.footer = "save config: " + err.Error()
+		return m
+	}
+	pal, warns := theme.LoadFromSettings(m.cfg.Settings)
+	m.palette = pal
+	if len(warns) > 0 {
+		m.footer = warns[0].Message
+	} else {
+		m.footer = "theme: " + next
+	}
+	return m
 }
 
 // activeViewDef resolves the active view, falling back to full.
@@ -1045,12 +1102,20 @@ func (m model) renderHeader() string {
 	dots := dot(theme.OK, fmt.Sprintf("%s%d", g.ok, ok)) + " " +
 		dot(theme.Warn, fmt.Sprintf("%s%d", g.account, account)) + " " +
 		dot(theme.Err, fmt.Sprintf("%s%d", g.down, down))
-	preset := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
-		Render("[p]reset: ") + m.activeViewDef().Name
-	checkBtn := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
-		Render("[c]heck all")
-	clock := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
-		Render(time.Now().Format("15:04"))
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	preset := accent.Render("[p]") + muted.Render("reset: "+m.activeViewDef().Name)
+	var checkBtn string
+	if m.checking {
+		checkBtn = m.spin.View() + muted.Render(" checking")
+	} else {
+		checkBtn = accent.Render("[c]") + muted.Render("heck all")
+	}
+	age := ""
+	if !m.lastCheck.IsZero() {
+		age = muted.Render(" · " + state.RelAge(time.Since(m.lastCheck)))
+	}
+	clock := muted.Render(time.Now().Format("15:04"))
 
 	// Brand art (gradient sweep) on the left; live summary beside it.
 	art := theme.Art(m.palette)
@@ -1063,7 +1128,7 @@ func (m model) renderHeader() string {
 	artW += 2 // breathing room before the summary
 
 	// At narrow widths drop the clock first, then let the summary truncate.
-	info := " " + dots + "   " + preset + "   " + checkBtn
+	info := " " + dots + "   " + preset + "   " + checkBtn + age
 	clockStr := clock
 	if artW+ansi.StringWidth(info)+ansi.StringWidth(clockStr) > m.width {
 		clockStr = ""
@@ -1101,8 +1166,12 @@ func (dashKeyMap) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "check one")),
 		key.NewBinding(key.WithKeys("s/u/f/t"), key.WithHelp("s/u/f/t", "menus")),
 		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "views")),
+		key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "theme")),
 		key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "settings")),
 		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
+		key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inspect")),
+		key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
+		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
 		key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "zoom")),
 		key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	}
@@ -1112,14 +1181,18 @@ func (k dashKeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortH
 
 func (m model) renderFooter() string {
 	if m.footer != "" {
-		return " " + lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn])).Render(m.footer)
+		return " " + truncate(
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn])).Render(m.footer),
+			m.width-1)
 	}
 	h := help.New()
 	h.SetWidth(m.width - 1)
-	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint]))
+	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
 	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
-	return " " + h.ShortHelpView(dashKeyMap{}.ShortHelp())
+	// bubbles help does not hard-clamp to its width — clamp ourselves so the
+	// footer can never push the frame's corners out.
+	return " " + truncate(h.ShortHelpView(dashKeyMap{}.ShortHelp()), m.width-1)
 }
 
 // renderStack renders panels vertically in view order.
@@ -1202,9 +1275,12 @@ func (m model) renderGrid(view config.View) string {
 // renderPane renders one box. y0 is its absolute screen row (for hit regions).
 func (m model) renderPane(p panelID, y0, w, h int, compact bool) string {
 	focused := m.focused == p
-	title := panelBracket(p)
+	title := m.styledTitle(p, "")
 	if p == panelStatus {
-		title += "  [c]heck all"
+		accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+		title += lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).
+			Render("  ") + accent.Render("[c]") +
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Render("heck all")
 	}
 
 	innerW := w - 2
@@ -1242,40 +1318,39 @@ func (m model) renderPane(p panelID, y0, w, h int, compact bool) string {
 		bs = lipgloss.ThickBorder()
 	}
 
+	// lipgloss v2 Width/Height include the border — w is the total.
 	box := lipgloss.NewStyle().
 		Border(bs).
 		BorderForeground(lipgloss.Color(borderColor)).
-		Width(innerW).
-		Height(innerH).
+		Width(w).
+		Height(h).
 		Render(strings.Join(contentLines, "\n"))
 
 	// Replace the top border line with the title-embedded version, built
 	// from separately-styled segments (never spliced into styled text).
 	lines := strings.Split(box, "\n")
 	if len(lines) > 0 {
-		lines[0] = buildTitleBorder(innerW+2, title, borderColor, bs, m.palette)
+		lines[0] = buildTitleBorder(w, title, borderColor, bs)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// buildTitleBorder constructs the top border line as SEPARATE styled
-// segments concatenated together — never spliced into a styled line, which
-// would corrupt escape sequences.
-func buildTitleBorder(w int, title, color string, bs lipgloss.Border, pal theme.Palette) string {
+// buildTitleBorder constructs the top border line as separately-styled
+// segments: border in border color, title arriving pre-styled (bound key in
+// accent per btop convention).
+func buildTitleBorder(w int, styledTitle, color string, bs lipgloss.Border) string {
 	if w < 4 {
 		return ""
 	}
 	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
-	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
-	titleTxt := " " + title + " "
+	titleTxt := " " + styledTitle + " "
 	fill := w - 2 - ansi.StringWidth(titleTxt) - 1 // corners + leading dash
 	if fill < 0 {
-		// Title too long for the border: cut it ANSI-safely.
 		titleTxt = ansi.Truncate(titleTxt, w-3, "")
 		fill = 0
 	}
 	return borderStyle.Render(bs.TopLeft+bs.Top) +
-		titleStyle.Render(titleTxt) +
+		titleTxt +
 		borderStyle.Render(strings.Repeat(bs.Top, fill)+bs.TopRight)
 }
 

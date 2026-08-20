@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chriisbusy/status-slug/internal/config"
 	"github.com/chriisbusy/status-slug/internal/state"
@@ -49,11 +50,11 @@ func TestPanelNames(t *testing.T) {
 	if panelNames[panelStatus] != "status" || panelNames[panelStats] != "stats" {
 		t.Errorf("panel names: %v", panelNames)
 	}
-	if panelBracket(panelStatus) != "[s]tatus" {
-		t.Errorf("bracket: %q", panelBracket(panelStatus))
+	if b, k, a := panelTitleSegs(panelStatus); b+":"+k+":"+a != ":s:tatus" {
+		t.Errorf("status segs: %q %q %q", b, k, a)
 	}
-	if panelBracket(panelStats) != "[t]stats" {
-		t.Errorf("bracket stats: %q", panelBracket(panelStats))
+	if b, k, a := panelTitleSegs(panelStats); b+":"+k+":"+a != "s:t:ats" {
+		t.Errorf("stats segs: %q %q %q", b, k, a)
 	}
 }
 
@@ -401,8 +402,8 @@ func TestMenuOverlaysOpen(t *testing.T) {
 
 func TestHeadingBracketsInRender(t *testing.T) {
 	m := newTestModel()
-	frame := m.render()
-	for _, b := range []string{"[s]tatus", "[u]sage", "[f]avourites", "[t]stats"} {
+	frame := ansi.Strip(m.render())
+	for _, b := range []string{"[s]tatus", "[u]sage", "[f]avourites", "s[t]ats"} {
 		if !strings.Contains(frame, b) {
 			t.Errorf("frame missing heading %q", b)
 		}
@@ -412,7 +413,7 @@ func TestHeadingBracketsInRender(t *testing.T) {
 func TestStackLayoutNarrow(t *testing.T) {
 	m := newTestModel()
 	m.width = 80 // < 100 forces stack
-	frame := m.render()
+	frame := ansi.Strip(m.render())
 	if !strings.Contains(frame, "[s]tatus") {
 		t.Error("stack render missing status pane")
 	}
@@ -421,8 +422,8 @@ func TestStackLayoutNarrow(t *testing.T) {
 func TestViewPanelsOmission(t *testing.T) {
 	m := newTestModel()
 	m.st.UI.View = "stats-only"
-	frame := m.render()
-	if !strings.Contains(frame, "[t]stats") {
+	frame := ansi.Strip(m.render())
+	if !strings.Contains(frame, "s[t]ats") {
 		t.Error("stats-only view should render stats")
 	}
 	if strings.Contains(frame, "[s]tatus") {
