@@ -37,6 +37,25 @@ func (m model) glyphs() glyphSet {
 
 func (m model) glyphFav() string { return m.glyphs().fav }
 
+// emptyHint renders an actionable empty-state line: muted lead-in, accent key.
+func (m model) emptyHint(lead, key, rest string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(lead+" ") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true).Render("["+key+"]") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(rest)
+}
+
+// latencyStyle colors a latency reading by threshold: fast green, mid muted,
+// slow amber — btop's data-by-value discipline.
+func (m model) latencyStyle(ms float64) lipgloss.Style {
+	c := m.palette[theme.Muted]
+	if ms > 0 && ms < 300 {
+		c = m.palette[theme.OK]
+	} else if ms >= 1000 {
+		c = m.palette[theme.Warn]
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(c))
+}
+
 // glyphFor maps a status string to the pane glyph.
 func (m model) glyphFor(status string) string {
 	g := m.glyphs()
@@ -64,8 +83,7 @@ func (m model) probeGlyph(status string) string {
 func (m model) renderStatusPane(w, h int, compact bool) string {
 	provs := m.sortedProviders()
 	if len(provs) == 0 {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
-			Render("no providers — press a to add")
+		return m.emptyHint("no providers —", "a", "dd your first one")
 	}
 	var lines []string
 	if m.prefs.statusGroup {
@@ -109,6 +127,7 @@ func (m model) statusGrouped(provs []*config.Provider, w int) []string {
 func (m model) statusRow(p *config.Provider, selected bool, w int) string {
 	status := "unknown"
 	latency := ""
+	latencyMs := 0.0
 	age := ""
 	reason := ""
 	if ps := m.st.Providers[p.Name]; ps != nil && ps.LastCheck != nil {
@@ -116,6 +135,7 @@ func (m model) statusRow(p *config.Provider, selected bool, w int) string {
 		status = lc.Status
 		reason = lc.Reason
 		if lc.LatencyMs > 0 {
+			latencyMs = lc.LatencyMs
 			latency = fmt.Sprintf("%.0fms", lc.LatencyMs)
 		}
 		if !lc.CheckedAt.IsZero() {
@@ -126,12 +146,19 @@ func (m model) statusRow(p *config.Provider, selected bool, w int) string {
 	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Fg]))
 	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor(m.palette, status)))
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	if !p.Enabled {
+		// Disabled providers dim and tag instead of probing.
+		status = "disabled"
+		dot = dim.Render("◌")
+		nameStyle = dim
+		statusStyle = dim
+	}
 
 	line := fmt.Sprintf("%s %s %s %s  %s",
 		dot,
 		nameStyle.Render(fmt.Sprintf("%-18s", truncate(p.Name, 18))),
 		statusStyle.Render(fmt.Sprintf("%-8s", status)),
-		fmt.Sprintf("%7s", latency),
+		m.latencyStyle(latencyMs).Render(fmt.Sprintf("%7s", latency)),
 		dim.Render(age))
 	if reason != "" && status != "ok" {
 		reasonStyle := dim
@@ -188,8 +215,7 @@ func (m model) usageEntries() []usageEntry {
 
 func (m model) renderUsagePane(w, h int, compact bool) string {
 	if len(m.cfg.Providers) == 0 {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
-			Render("no providers")
+		return m.emptyHint("no providers —", "a", "dd your first one")
 	}
 	var lines []string
 	for _, p := range m.sortedProviders() {
@@ -205,6 +231,9 @@ func (m model) renderUsagePane(w, h int, compact bool) string {
 		if p.Note != "" && !compact {
 			lines = append(lines, "  "+lipgloss.NewStyle().
 				Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(p.Note))
+		}
+		if len(p.Meters) == 0 {
+			lines = append(lines, "  "+m.emptyHint("no meters —", "u", " menu to add one"))
 		}
 		for _, meter := range p.Meters {
 			lines = append(lines, m.meterLines(p.Name, meter, w, compact)...)
@@ -237,8 +266,13 @@ func (m model) meterLines(provName string, meter config.Meter, w int, compact bo
 	fmt.Fprintf(&b, "  %s %.4g", meter.Name, val)
 	if meter.Cap > 0 {
 		fmt.Fprintf(&b, "/%.4g", meter.Cap)
+	} else {
+		b.WriteString(" (no cap)")
 	}
 	b.WriteString(" " + meter.Unit)
+	if meter.Kind == "auto" {
+		b.WriteString(" · auto")
+	}
 	if !setAt.IsZero() {
 		age := state.RelAge(time.Since(setAt))
 		if meter.Kind == "manual" {
@@ -288,29 +322,39 @@ func (m model) meterLines(provName string, meter config.Meter, w int, compact bo
 		lines = append(lines, "  "+bar.ViewAs(pct)+pctTxt)
 	}
 
-	// Reset line.
+	// Reset line: overdue in red, imminent (<2d) in amber, otherwise muted.
 	if meter.Reset != "" && meter.Reset != "never" {
-		if rl := resetDescription(meter.Reset, time.Now()); rl != "" {
+		if rl, urgency := resetDescription(meter.Reset, time.Now()); rl != "" {
+			c := m.palette[theme.Muted]
+			switch urgency {
+			case -1:
+				c = m.palette[theme.Err]
+			case 1:
+				c = m.palette[theme.Warn]
+			}
 			lines = append(lines, "  "+lipgloss.NewStyle().
-				Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(rl))
+				Foreground(lipgloss.Color(c)).Render(rl))
 		}
 	}
 	return lines
 }
 
-// resetDescription renders a human reset line from a spec.
-func resetDescription(spec string, now time.Time) string {
+// resetDescription renders a human reset line and its urgency:
+// -1 overdue, 1 imminent (<2 days), 0 otherwise.
+func resetDescription(spec string, now time.Time) (string, int) {
 	next := provider.NextResetForTest(spec, now)
 	d := time.Until(next)
 	switch {
 	case spec == "" || spec == "never":
-		return ""
+		return "", 0
 	case d < 0:
-		return "overdue since " + next.Format("Jan 2")
+		return "overdue since " + next.Format("Jan 2"), -1
 	case d < 24*time.Hour:
-		return fmt.Sprintf("cycle resets in %dh", int(d.Hours()))
+		return fmt.Sprintf("cycle resets in %dh", int(d.Hours())), 1
+	case d < 48*time.Hour:
+		return "cycle resets tomorrow", 1
 	default:
-		return fmt.Sprintf("cycle resets in %dd", int(d.Hours()/24))
+		return fmt.Sprintf("cycle resets in %dd", int(d.Hours()/24)), 0
 	}
 }
 
@@ -319,8 +363,7 @@ func resetDescription(spec string, now time.Time) string {
 func (m model) renderFavouritesPane(w, h int, compact bool) string {
 	favs := m.favouriteList()
 	if len(favs) == 0 {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).
-			Render("no favourites — press f to add")
+		return m.emptyHint("no favourites —", "f", " menu to add one")
 	}
 	sparkW := w / 3
 	if sparkW > 20 {
@@ -341,6 +384,7 @@ func (m model) renderFavouritesPane(w, h int, compact bool) string {
 		name = truncate(name, 18)
 		status := "unknown"
 		latency := ""
+		latencyMs := 0.0
 		age := ""
 		var ring []float64
 		if ps := m.st.Providers[f.provider.Name]; ps != nil {
@@ -349,14 +393,16 @@ func (m model) renderFavouritesPane(w, h int, compact bool) string {
 				if ms.LastCheck != nil {
 					status = ms.LastCheck.Status
 					if ms.LastCheck.LatencyMs > 0 {
+						latencyMs = ms.LastCheck.LatencyMs
 						latency = fmt.Sprintf("%.0fms", ms.LastCheck.LatencyMs)
 					}
 					age = state.RelAge(time.Since(ms.LastCheck.CheckedAt))
 				}
 			}
 		}
-		line := fmt.Sprintf("%s %-18s %s %7s %s %s",
-			m.glyphFav(), name, m.probeGlyph(status), latency,
+		line := fmt.Sprintf("%s %-18s %s %s %s %s",
+			m.glyphFav(), name, m.probeGlyph(status),
+			m.latencyStyle(latencyMs).Render(fmt.Sprintf("%7s", latency)),
 			sparkStyle.Render(Spark(ring, sparkW, m.cfg.Settings.GraphGlyphs)), dim.Render(age))
 		if i == m.sel[panelFavourites] && m.focused == panelFavourites {
 			lines = append(lines, lipgloss.NewStyle().
@@ -635,10 +681,9 @@ func (m model) statsTable(w, h int) (table.Model, bool) {
 }
 
 func (m model) renderStatsPane(w, h int, compact bool) string {
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	t, ok := m.statsTable(w, h)
 	if !ok {
-		return dim.Render("no data yet — run a check")
+		return m.emptyHint("no data yet —", "c", "heck to start measuring")
 	}
 	return t.View()
 }
@@ -681,10 +726,20 @@ func renderScrollable(lines []string, offset, h int, pal theme.Palette) string {
 	for len(visible) < h {
 		visible = append(visible, "")
 	}
-	// Scrollbar when content overflows.
+	// Scrollbar when content overflows: pad every line to the widest first,
+	// so the track forms a straight column at the pane edge.
 	if len(lines) > h {
 		bar := scrollbar(len(lines), offset, h, pal)
+		maxW := 0
+		for _, l := range visible {
+			if lw := lipgloss.Width(l); lw > maxW {
+				maxW = lw
+			}
+		}
 		for i := range visible {
+			if pad := maxW - lipgloss.Width(visible[i]); pad > 0 {
+				visible[i] += strings.Repeat(" ", pad)
+			}
 			visible[i] += " " + bar[i]
 		}
 	}

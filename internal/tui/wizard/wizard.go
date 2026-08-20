@@ -106,6 +106,15 @@ func New(cfg config.Config, reconfigure string) Model {
 	return m
 }
 
+// StepName returns the current step's display name for the popup title.
+func (m Model) StepName() string {
+	i := int(m.step)
+	if i < 0 || i >= len(stepNames) {
+		return ""
+	}
+	return stepNames[i]
+}
+
 // Config returns the wizard's updated config.
 func (m Model) Config() config.Config { return m.cfg }
 

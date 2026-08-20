@@ -446,6 +446,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = m.newHelpOverlay()
 	case "i":
 		m.ov = m.newInspectOverlay()
+	case "m":
+		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
+			{"add provider", "main.add"},
+			{"settings", "main.settings"},
+			{"cycle theme", "main.theme"},
+			{"cycle view", "main.view"},
+			{"help", "main.help"},
+			{"quit", "main.quit"},
+		}}
+		return m, nil
 	case "s":
 		m.ov = m.newMenuOverlay(panelStatus)
 	case "u":
@@ -1013,7 +1023,11 @@ func (m model) renderWizardPopup(base string) string {
 			Padding(0, 2).
 			Render(strings.Join(lines, "\n"))
 	}
-	return compositeCentered(base, box, m.width, m.height, " setup ")
+	title := " setup"
+	if sn := m.wiz.StepName(); sn != "" {
+		title = " setup · " + sn
+	}
+	return compositeCentered(base, box, m.width, m.height, title+" ")
 }
 
 // compositeCentered overlays content (with optional title spliced into its
@@ -1104,17 +1118,35 @@ func (m model) renderHeader() string {
 		dot(theme.Err, fmt.Sprintf("%s%d", g.down, down))
 	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
-	preset := accent.Render("[p]") + muted.Render("reset: "+m.activeViewDef().Name)
-	var checkBtn string
+
+	// Navigation indicators, btop-style: accent-keyed, clickable buttons.
+	type navBtn struct {
+		text string
+		kind string
+	}
+	var checkBtn navBtn
 	if m.checking {
-		checkBtn = m.spin.View() + muted.Render(" checking")
+		checkBtn = navBtn{m.spin.View() + muted.Render(" checking"), "check-button"}
 	} else {
-		checkBtn = accent.Render("[c]") + muted.Render("heck all")
+		checkBtn = navBtn{accent.Render("[c]") + muted.Render("heck"), "check-button"}
+	}
+	nav := []navBtn{
+		{accent.Render("[m]") + muted.Render("enu"), "menu"},
+		{accent.Render("[p]") + muted.Render("reset: "+m.activeViewDef().Name), "cycle-view"},
+		{accent.Render("[T]") + muted.Render("heme"), "theme"},
+		checkBtn,
+		{accent.Render("[S]") + muted.Render("ettings"), "settings"},
+		{accent.Render("[?]"), "help"},
+	}
+	info := " " + dots
+	for _, b := range nav {
+		info += "   " + b.text
 	}
 	age := ""
 	if !m.lastCheck.IsZero() {
 		age = muted.Render(" · " + state.RelAge(time.Since(m.lastCheck)))
 	}
+	info += age
 	clock := muted.Render(time.Now().Format("15:04"))
 
 	// Brand art (gradient sweep) on the left; live summary beside it.
@@ -1128,7 +1160,6 @@ func (m model) renderHeader() string {
 	artW += 2 // breathing room before the summary
 
 	// At narrow widths drop the clock first, then let the summary truncate.
-	info := " " + dots + "   " + preset + "   " + checkBtn + age
 	clockStr := clock
 	if artW+ansi.StringWidth(info)+ansi.StringWidth(clockStr) > m.width {
 		clockStr = ""
@@ -1147,12 +1178,13 @@ func (m model) renderHeader() string {
 	}
 	joined = strings.Join(out, "\n")
 
-	// Header hit regions (two-line header).
-	btnX := artW + 1 + lipgloss.Width(fmt.Sprintf("%s%d %s%d %s%d", g.ok, ok, g.account, account, g.down, down)) + 3 + lipgloss.Width("[p]reset: "+m.activeViewDef().Name) + 3
-	m.regions = append(m.regions,
-		hitRegion{kind: "cycle-view", x: artW + 1 + lipgloss.Width(fmt.Sprintf("%s%d %s%d %s%d", g.ok, ok, g.account, account, g.down, down)) + 3, y: 0, w: lipgloss.Width("[p]reset: " + m.activeViewDef().Name), h: 1},
-		hitRegion{kind: "check-button", x: btnX, y: 0, w: lipgloss.Width("[c]heck all"), h: 1},
-	)
+	// Register nav click regions by cumulative width.
+	x := artW + 1 + ansi.StringWidth(" "+dots)
+	for _, b := range nav {
+		x += 3
+		m.regions = append(m.regions, hitRegion{kind: b.kind, x: x, y: 0, w: ansi.StringWidth(b.text), h: 1})
+		x += ansi.StringWidth(b.text)
+	}
 	return joined
 }
 
@@ -1169,6 +1201,7 @@ func (dashKeyMap) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "theme")),
 		key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "settings")),
 		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
+		key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "menu")),
 		key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inspect")),
 		key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),

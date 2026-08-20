@@ -72,6 +72,24 @@ func (m model) overlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q", "?", "i":
 			m.ov = overlayState{}
 			return m, nil
+		case "enter":
+			// From the inspect overlay: re-probe the inspected target.
+			if m.ov.title == "inspect" && !m.checking {
+				m.ov = overlayState{}
+				if m.focused == panelStatus {
+					if p := m.selectedProvider(); p != nil {
+						cmd := m.startCheckOne(*p)
+						return m, cmd
+					}
+				}
+				if m.focused == panelFavourites {
+					if pv, mod := m.selectedFavourite(); mod != nil {
+						cmd := m.startCheckModel(*pv, *mod)
+						return m, cmd
+					}
+				}
+			}
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.ov.vp, cmd = m.ov.vp.Update(msg)
@@ -278,6 +296,28 @@ func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 	m.ov = overlayState{}
 	switch {
+	case strings.HasPrefix(action, "main."):
+		switch strings.TrimPrefix(action, "main.") {
+		case "add":
+			m.openWizard("")
+			if m.wiz != nil {
+				return m, m.wiz.Init()
+			}
+		case "settings":
+			m.ov = m.newSettingsOverlay()
+			if m.ov.kind == overlayForm {
+				return m, m.ov.form.Init()
+			}
+		case "theme":
+			return m.cycleTheme(), nil
+		case "view":
+			return m.cycleView(), nil
+		case "help":
+			m.ov = m.newHelpOverlay()
+		case "quit":
+			return m, tea.Quit
+		}
+
 	case strings.HasPrefix(action, "status.sort:"):
 		m.prefs.statusSort = strings.TrimPrefix(action, "status.sort:")
 		m.savePrefs()
@@ -908,6 +948,7 @@ func (m model) newHelpOverlay() overlayState {
 
 func (m model) newInspectOverlay() overlayState {
 	content := m.inspectText()
+	content += "\n\n---\n\n`enter` re-probe · `esc` close"
 	rendered, err := glamour.Render(content, "dark")
 	if err != nil {
 		rendered = content
@@ -1013,18 +1054,22 @@ func (m model) renderOverlay(base string) string {
 	case overlayMenu:
 		var b strings.Builder
 		for i, item := range m.ov.menuItems {
+			label := item.label
+			if item.action == "stats.sort" {
+				label += " ›"
+			}
 			if i == m.ov.menuSel {
 				b.WriteString(lipgloss.NewStyle().
 					Background(lipgloss.Color(m.palette[theme.SelectedBg])).
 					Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
-					Render("> " + item.label))
+					Render("> " + label))
 			} else {
-				b.WriteString("  " + item.label)
+				b.WriteString("  " + label)
 			}
 			b.WriteString("\n")
 		}
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
-			Render("\nenter select · esc close"))
+			Render("\nj/k navigate · enter select · esc close"))
 		content = b.String()
 	case overlayInput:
 		content = m.ov.input.View() + "\n\n" +
@@ -1052,6 +1097,7 @@ const helpMarkdown = `# sslug keys
 
 | key | action |
 |---|---|
+| m | main menu |
 | tab / shift-tab | cycle pane focus |
 | j / k, PgUp/PgDn | scroll |
 | c | check all providers |

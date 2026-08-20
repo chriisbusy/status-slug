@@ -13,15 +13,39 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 
 	// Header buttons.
 	for _, r := range m.regions {
-		if r.kind == "check-button" && inRegion(x, y, r) {
+		if !inRegion(x, y, r) {
+			continue
+		}
+		switch r.kind {
+		case "check-button":
 			if !m.checking {
 				cmd := m.startCheckAll()
 				return m, cmd
 			}
 			return m, nil
-		}
-		if r.kind == "cycle-view" && inRegion(x, y, r) {
+		case "cycle-view":
 			return m.cycleView(), nil
+		case "theme":
+			return m.cycleTheme(), nil
+		case "settings":
+			m.ov = m.newSettingsOverlay()
+			if m.ov.kind == overlayForm {
+				return m, m.ov.form.Init()
+			}
+			return m, nil
+		case "help":
+			m.ov = m.newHelpOverlay()
+			return m, nil
+		case "menu":
+			m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
+				{"add provider", "main.add"},
+				{"settings", "main.settings"},
+				{"cycle theme", "main.theme"},
+				{"cycle view", "main.view"},
+				{"help", "main.help"},
+				{"quit", "main.quit"},
+			}}
+			return m, nil
 		}
 	}
 

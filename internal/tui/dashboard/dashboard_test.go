@@ -354,12 +354,20 @@ func TestRenderScrollable(t *testing.T) {
 
 func TestResetDescription(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	got := resetDescription("monthly:1", now)
+	got, urgency := resetDescription("monthly:1", now)
 	if !strings.Contains(got, "resets in") {
 		t.Errorf("monthly:1 from Aug 19: %q", got)
 	}
-	if got := resetDescription("never", now); got != "" {
+	if urgency != 0 {
+		t.Errorf("monthly:1 is 13d out, urgency should be 0, got %d", urgency)
+	}
+	if got, _ := resetDescription("never", now); got != "" {
 		t.Errorf("never should be empty: %q", got)
+	}
+	// Overdue date in the past must be flagged.
+	got, urgency = resetDescription("date:2026-08-01", now)
+	if urgency != -1 || !strings.Contains(got, "overdue") {
+		t.Errorf("past date should be overdue: %q urgency=%d", got, urgency)
 	}
 }
 
