@@ -112,7 +112,7 @@ func (m model) statusGrouped(provs []*config.Provider, w int) []string {
 	var lines []string
 	selIdx := 0
 	for _, l := range order {
-		hdr := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true).
+		hdr := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelStatus))).Bold(true).
 			Render("── " + l + " ")
 		lines = append(lines, hdr)
 		for _, p := range byLabel[l] {
@@ -225,7 +225,7 @@ func (m model) renderUsagePane(w, h int, compact bool) string {
 		} else {
 			dot = m.glyphFor("unknown")
 		}
-		hdr := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+		hdr := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelUsage))).Bold(true)
 		lines = append(lines, dot+" "+hdr.Render(p.Name))
 		if p.Note != "" && !compact {
 			lines = append(lines, "  "+lipgloss.NewStyle().
@@ -378,8 +378,9 @@ func (m model) renderFavouritesPane(w, h int, compact bool) string {
 				}
 			}
 		}
+		favMark := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelFavourites))).Render(m.glyphFav())
 		line := fmt.Sprintf("%s %-18s %s %s %s %s",
-			m.glyphFav(), name, m.probeGlyph(status),
+			favMark, name, m.probeGlyph(status),
 			m.latencyStyle(latencyMs).Render(fmt.Sprintf("%7s", latency)),
 			sparkStyle.Render(Spark(ring, sparkW, m.cfg.Settings.GraphGlyphs)), dim.Render(age))
 		if i == m.sel[panelFavourites] && m.focused == panelFavourites {
@@ -635,7 +636,7 @@ func (m model) statsTable(w, h int) (table.Model, bool) {
 
 	styles := table.DefaultStyles()
 	styles.Header = styles.Header.
-		Foreground(lipgloss.Color(m.palette[theme.Title])).
+		Foreground(lipgloss.Color(m.panelChrome(panelStats))).
 		Bold(true)
 	styles.Selected = styles.Selected.
 		Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).

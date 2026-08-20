@@ -56,13 +56,30 @@ func panelTitleSegs(p panelID) (before, key, after string) {
 	return "", "", ""
 }
 
-// styledTitle renders a panel heading: bound key in accent (brackets kept),
-// the rest of the word in title color.
+// panelChrome returns the section color used for each pane's border and title.
+// This matches btop's theme language: each panel owns a consistent section
+// color, while ok/warn/err remain semantic inside rows.
+func (m model) panelChrome(p panelID) string {
+	switch p {
+	case panelStatus:
+		return m.palette[theme.Accent]
+	case panelUsage:
+		return m.palette[theme.GradHi]
+	case panelFavourites:
+		return m.palette[theme.OK]
+	case panelStats:
+		return m.palette[theme.Warn]
+	default:
+		return m.palette[theme.Accent]
+	}
+}
+
+// styledTitle renders a panel heading using that panel's chrome color.
 func (m model) styledTitle(p panelID, extra string) string {
 	before, key, after := panelTitleSegs(p)
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title]))
-	out := title.Render(before) + accent.Render("["+key+"]") + title.Render(after)
+	chrome := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(p))).Bold(true)
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(p)))
+	out := title.Render(before) + chrome.Render("["+key+"]") + title.Render(after)
 	if extra != "" {
 		out += title.Render(extra)
 	}
@@ -1417,13 +1434,12 @@ func (m model) renderGrid(view config.View) string {
 
 // renderPane renders one box. y0 is its absolute screen row (for hit regions).
 func (m model) renderPane(p panelID, y0, w, h int, compact bool) string {
-	focused := m.focused == p
 	title := m.styledTitle(p, "")
 	if p == panelStatus {
-		accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
-		title += lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).
+		accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(p))).Bold(true)
+		title += lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(p))).
 			Render("  ") + accent.Render("[c]") +
-			lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Render("heck all")
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(p))).Render("heck all")
 	}
 
 	innerW := w - 2
@@ -1449,10 +1465,7 @@ func (m model) renderPane(p panelID, y0, w, h int, compact bool) string {
 		contentLines = contentLines[:innerH]
 	}
 
-	borderColor := m.palette[theme.BoxBorder]
-	if focused {
-		borderColor = m.palette[theme.BoxBorderFocus]
-	}
+	borderColor := m.panelChrome(p)
 	bs := lipgloss.RoundedBorder()
 	switch m.cfg.Settings.BorderStyle {
 	case "square":

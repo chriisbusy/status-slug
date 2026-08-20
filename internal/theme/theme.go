@@ -61,29 +61,28 @@ type Warning struct {
 }
 
 // Builtins.
-// sstop is the default: btop's discipline — white/gray chrome, color reserved
-// for data. Interactive elements (bound keys, selectors, buttons) get bright
-// cyan; titles bright white; borders bright black; art sweeps cyan→blue.
-// Values are ANSI indices so sslug draws from the terminal's own palette,
-// exactly like btop's TTY theme — the two always match.
+// sstop is the default btop-like terminal theme. It intentionally uses ANSI
+// palette slots, not arbitrary hex, so it inherits the user's terminal colors
+// exactly like btop. Structural chrome is cyan/blue/green/yellow by panel;
+// severity data uses green/yellow/red by value.
 var builtinSstop = Palette{
 	Bg:             "",   // terminal default
-	Fg:             "7",  // white
-	Muted:          "8",  // bright black — btop's dim gray
-	Title:          "15", // bright white
-	Accent:         "14", // bright cyan — interactive elements only
+	Fg:             "7",  // terminal foreground/white
+	Muted:          "8",  // dim gray
+	Title:          "15", // bright white body text
+	Accent:         "14", // cyan structural chrome
 	BoxBorder:      "8",
-	BoxBorderFocus: "15", // focused box: bright white, not cyan
-	OK:             "10",
-	Warn:           "11",
-	Err:            "9",
+	BoxBorderFocus: "14",
+	OK:             "10", // green
+	Warn:           "11", // yellow
+	Err:            "9",  // red
 	Unknown:        "8",
-	BarFill:        "10", // bars start green…
+	BarFill:        "10",
 	BarEmpty:       "8",
 	SparkLo:        "8",
 	SparkHi:        "10",
-	GradLo:         "14", // cyan → blue sweep, no magenta
-	GradHi:         "12",
+	GradLo:         "14", // logo sweep: cyan
+	GradHi:         "12", // → blue; no pink/purple/magenta
 	SelectedBg:     "8",
 	SelectedFg:     "15",
 	KeyHint:        "8",
