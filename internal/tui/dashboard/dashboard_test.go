@@ -436,6 +436,37 @@ func TestRenderScrollable(t *testing.T) {
 	}
 }
 
+func TestFullViewUsesBalancedColumns(t *testing.T) {
+	full := builtinViews()[0]
+	if full.Name != "full" || full.MainSplit != 0.50 {
+		t.Fatalf("full view should use balanced columns: %+v", full)
+	}
+}
+
+func TestHeaderKeepsSSLUGWordmark(t *testing.T) {
+	m := newTestModel()
+	rows, _ := m.headerRows()
+	got := ansi.Strip(strings.Join(rows, "\n"))
+	for _, want := range []string{theme.ArtLines[0], "status slug"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("header missing wordmark component %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFooterUsesCompactWholeActions(t *testing.T) {
+	m := newTestModel()
+	got := ansi.Strip(m.renderFooter())
+	for _, want := range []string{"⏎ probe", "c all", "s actions", "p preset"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("footer missing compact action %q: %q", want, got)
+		}
+	}
+	if ansi.StringWidth(m.renderFooter()) > m.width {
+		t.Fatalf("footer exceeds width %d: %q", m.width, got)
+	}
+}
+
 func TestHeaderClickRegionsOpenMenu(t *testing.T) {
 	m := newTestModel()
 	_, regions := m.headerRows()

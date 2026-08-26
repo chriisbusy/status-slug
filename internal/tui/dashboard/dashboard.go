@@ -891,7 +891,7 @@ func (m model) activeViewDef() config.View {
 
 func builtinViews() []config.View {
 	return []config.View{
-		{Name: "full", Panels: []string{"status", "usage", "favourites", "stats"}, Arrangement: "grid", MainSplit: 0.58},
+		{Name: "full", Panels: []string{"status", "usage", "favourites", "stats"}, Arrangement: "grid", MainSplit: 0.50},
 		{Name: "compact", Panels: []string{"status", "usage", "favourites", "stats"}, Arrangement: "stack", Compact: true, MainSplit: 0.66},
 		{Name: "status-only", Panels: []string{"status"}, Arrangement: "stack", MainSplit: 1.0},
 		{Name: "stats-only", Panels: []string{"stats"}, Arrangement: "stack", MainSplit: 1.0},
@@ -1313,21 +1313,41 @@ func (m model) renderFooter() string {
 	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	item := func(key, desc string) string {
-		return accent.Render(key) + muted.Render(" "+desc)
+		return accent.Render(key) + muted.Render(desc)
 	}
-	var parts []string
+	var primary []string
 	switch m.focused {
 	case panelStatus:
-		parts = []string{item("⏎", "check selected"), item("c", "check all"), item("i", "inspect"), item("s", "status menu"), item("r", "edit"), item("d", "disable/remove")}
+		primary = []string{item("⏎", " probe"), item("c", " all"), item("i", " inspect"), item("s", " actions"), item("r", " edit"), item("d", " off/remove")}
 	case panelUsage:
-		parts = []string{item("u", "usage menu"), item("set", "meter value"), item("add", "meter"), item("refresh", "auto"), item("j/k", "scroll")}
+		primary = []string{item("u", " actions"), item("j/k", " rows"), item("↑/↓", " scroll"), item("⏎", " set via menu")}
 	case panelFavourites:
-		parts = []string{item("⏎", "probe model"), item("f", "favourites menu"), item("sort", m.prefs.favSort), item("a", "add provider")}
+		primary = []string{item("⏎", " probe"), item("f", " actions"), item("j/k", " rows"), item("a", " provider")}
 	case panelStats:
-		parts = []string{item("t", "stats menu"), item("click", "sort column"), item("p50/p95", "latency"), item("z", "zoom")}
+		primary = []string{item("t", " actions"), item("click", " sort"), item("j/k", " rows"), item("z", " zoom")}
 	}
-	parts = append(parts, item("tab", "focus"), item("m", "menu"), item("p", "view"), item("?", "help"), item("q", "quit"))
-	return " " + truncate(strings.Join(parts, muted.Render(" · ")), m.width-1)
+	primary = append(primary, item("tab", " focus"), item("m", " menu"), item("p", " preset"), item("?", " help"), item("q", " quit"))
+	return " " + fitActionLine(primary, m.width-1, muted.Render(" · "))
+}
+
+func fitActionLine(parts []string, width int, sep string) string {
+	if width <= 0 {
+		return ""
+	}
+	var line string
+	for _, part := range parts {
+		candidate := part
+		if line != "" {
+			candidate = line + sep + part
+		}
+		if ansi.StringWidth(candidate) <= width {
+			line = candidate
+		}
+	}
+	if line == "" && len(parts) > 0 {
+		return truncate(parts[0], width)
+	}
+	return line
 }
 
 // renderStack renders panels vertically in view order.
