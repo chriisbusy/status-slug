@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -122,7 +123,7 @@ func TestCycleViewOrder(t *testing.T) {
 
 func TestCycleViewIncludesUserViews(t *testing.T) {
 	m := newTestModel()
-	m.cfg.Views = []config.View{{Name: "mine", Panels: []string{"stats"}, Arrangement: "stack"}}
+	m.cfg.Views = []config.View{{Name: "mine", Panels: []string{"stats"}, TopRatio: 0.33, LeftRatio: 0.37, UsageRatio: 0.46}}
 	m.st.UI.View = "stats-only"
 	m = m.cycleView()
 	if m.st.UI.View != "mine" {
@@ -145,7 +146,7 @@ func TestActiveViewFallback(t *testing.T) {
 
 func TestUserViewReplacesBuiltin(t *testing.T) {
 	m := newTestModel()
-	m.cfg.Views = []config.View{{Name: "full", Panels: []string{"stats"}, Arrangement: "stack"}}
+	m.cfg.Views = []config.View{{Name: "full", Panels: []string{"stats"}, TopRatio: 0.33, LeftRatio: 0.37, UsageRatio: 0.46}}
 	m.st.UI.View = "full"
 	v := m.activeViewDef()
 	if len(v.Panels) != 1 || v.Panels[0] != "stats" {
@@ -163,16 +164,18 @@ func TestRenderStatusPane(t *testing.T) {
 	}
 }
 
-func TestStatusPaneShowsHierarchyAndReadableReasons(t *testing.T) {
+func TestStatusPaneShowsGraphGaugesAndProviders(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderStatusPane(90, 20, false))
 	for _, want := range []string{
-		"fleet",
-		"live endpoint card",
-		"latency",
-		"account/auth problem",
-		"network timeout",
-		"disabled · skipped by probes",
+		"600ms",
+		"errors",
+		"provider/model",
+		"OKProv",
+		"AuthProv",
+		"DownProv",
+		"Neuralwatt",
+		"▰",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("status pane missing %q in:\n%s", want, got)
@@ -180,12 +183,12 @@ func TestStatusPaneShowsHierarchyAndReadableReasons(t *testing.T) {
 	}
 }
 
-func TestRenderStatusPaneEmpty(t *testing.T) {
+func TestRenderStatusPaneEmptyLeavesActionForBorder(t *testing.T) {
 	m := newTestModel()
 	m.cfg.Providers = nil
-	got := m.renderStatusPane(80, 10, false)
-	if !strings.Contains(got, "no providers") {
-		t.Errorf("empty status pane: %q", got)
+	got := ansi.Strip(m.renderStatusPane(80, 10, false))
+	if strings.Contains(got, "no providers") {
+		t.Errorf("empty action belongs on pane border, not content: %q", got)
 	}
 }
 
@@ -203,41 +206,31 @@ func TestUsagePaneShowsDisabledProviderMeter(t *testing.T) {
 	}
 }
 
-func TestUsagePaneShowsMeterSummaryAndBar(t *testing.T) {
+func TestUsagePaneShowsSquareCellMeter(t *testing.T) {
 	m := newTestModel()
-	got := ansi.Strip(m.renderUsagePane(80, 30, false))
-	for _, want := range []string{"meters", "manual 1", "auto 0", "231.5 / 1000 kWh", "23%"} {
+	meter := m.cfg.Providers[3].Meters[0]
+	got := ansi.Strip(strings.Join(m.meterLines("Neuralwatt", meter, 80, false), "\n"))
+	for _, want := range []string{"Neuralwatt · Energy", "231.5 / 1000 kWh", "23%", "manual"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("usage pane missing %q in:\n%s", want, got)
+			t.Errorf("usage meter missing %q in:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(got, "█") || !strings.Contains(got, "░") {
-		t.Errorf("usage pane should render filled and empty meter bar:\n%s", got)
+	if !strings.Contains(got, "■") {
+		t.Errorf("usage meter must use square cells:\n%s", got)
 	}
-	if strings.Count(got, "no meters") > 3 {
-		t.Errorf("no-meter providers should be collapsed, got repeated noise:\n%s", got)
-	}
-}
-
-func TestUsagePaneCompactDropsSpacers(t *testing.T) {
-	m := newTestModel()
-	full := strings.TrimRight(m.renderUsagePane(80, 100, false), "\n")
-	compact := strings.TrimRight(m.renderUsagePane(80, 100, true), "\n")
-	// Non-compact has interior blank separator lines; compact has none.
-	if !strings.Contains(full, "\n\n") {
-		t.Error("non-compact should contain interior blank lines")
-	}
-	if strings.Contains(compact, "\n\n") {
-		t.Error("compact must drop spacer lines")
+	if len(strings.Split(got, "\n")) != 3 {
+		t.Fatalf("capped meter should render exactly three lines:\n%s", got)
 	}
 }
 
-func TestRenderStatsPaneNoData(t *testing.T) {
+func TestRenderStatsPaneWithoutChecksShowsUnknownRows(t *testing.T) {
 	m := newTestModel()
 	m.st = state.New()
-	got := m.renderStatsPane(60, 10, false)
-	if !strings.Contains(got, "no data yet") {
-		t.Errorf("stats pane empty: %q", got)
+	got := ansi.Strip(m.renderStatsPane(60, 10, false))
+	for _, want := range []string{"program", "OKProv", "mock-alpha"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stats pane missing configured unknown row %q: %q", want, got)
+		}
 	}
 }
 
@@ -303,13 +296,13 @@ func TestPercentile(t *testing.T) {
 	}
 }
 
-func TestSparkGlyphModesDiffer(t *testing.T) {
+func TestSparkGraphStylesDiffer(t *testing.T) {
 	values := []float64{40, 95, 180, 130, 260, 115}
+	tty := Spark(values, 10, "tty")
+	block := Spark(values, 10, "block")
 	braille := Spark(values, 10, "braille")
-	blocks := Spark(values, 10, "blocks")
-	ascii := Spark(values, 10, "ascii")
-	if braille == blocks || braille == ascii || blocks == ascii {
-		t.Fatalf("glyph modes should differ: braille=%q blocks=%q ascii=%q", braille, blocks, ascii)
+	if tty == block || tty == braille || block == braille {
+		t.Fatalf("graph styles should differ: tty=%q block=%q braille=%q", tty, block, braille)
 	}
 }
 
@@ -320,7 +313,7 @@ func TestFavouritesPaneShowsCockpitHistoryAndP95(t *testing.T) {
 		m.st.RecordModelCheck("OKProv", "mock-alpha", state.CheckResult{Status: "ok", LatencyMs: ms, CheckedAt: now}, 60)
 	}
 	got := ansi.Strip(m.renderFavouritesPane(80, 20, false))
-	for _, want := range []string{"cockpit", "latency tape", "p95", "OKProv", "mock-alpha"} {
+	for _, want := range []string{"model", "graph", "p95", "OKProv", "mock-alpha"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("favourites pane missing %q in:\n%s", want, got)
 		}
@@ -330,24 +323,23 @@ func TestFavouritesPaneShowsCockpitHistoryAndP95(t *testing.T) {
 	}
 }
 
-func TestStatsColumnsKeepPercentilesAtDefaultRightWidth(t *testing.T) {
-	cols, keys := statsColumnsForWidth(38)
-	_ = cols
+func TestStatsColumnsKeepProcessGrammarAtNarrowWidth(t *testing.T) {
+	_, keys := statsColumnsForWidth(38)
 	present := map[string]bool{}
-	for _, k := range keys {
-		present[k] = true
+	for _, key := range keys {
+		present[key] = true
 	}
-	for _, want := range []string{"p50", "p95", "down", "ok%"} {
+	for _, want := range []string{"name", "latency", "history", "p95", "status"} {
 		if !present[want] {
-			t.Errorf("stats column %q should survive default narrow width; keys=%v", want, keys)
+			t.Errorf("stats column %q missing; keys=%v", want, keys)
 		}
 	}
 }
 
-func TestStatsPaneCompactRenderShowsPercentiles(t *testing.T) {
+func TestStatsPaneCompactRenderShowsProcessColumns(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderStatsPane(38, 10, false))
-	for _, want := range []string{"p50", "p95", "↓", "OKProv"} {
+	for _, want := range []string{"program", "latency", "graph", "p95", "OKProv"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("compact stats pane missing %q in:\n%s", want, got)
 		}
@@ -436,20 +428,20 @@ func TestRenderScrollable(t *testing.T) {
 	}
 }
 
-func TestFullViewUsesBalancedColumns(t *testing.T) {
+func TestFullViewUsesConfiguredRatios(t *testing.T) {
 	full := builtinViews()[0]
-	if full.Name != "full" || full.MainSplit != 0.50 {
-		t.Fatalf("full view should use balanced columns: %+v", full)
+	if full.Name != "full" || full.TopRatio != 0.33 || full.LeftRatio != 0.37 || full.UsageRatio != 0.46 {
+		t.Fatalf("full view ratios: %+v", full)
 	}
 }
 
-func TestHeaderKeepsSSLUGWordmark(t *testing.T) {
+func TestHeaderKeepsExactSSLUGWordmark(t *testing.T) {
 	m := newTestModel()
 	rows, _ := m.headerRows()
 	got := ansi.Strip(strings.Join(rows, "\n"))
-	for _, want := range []string{theme.ArtLines[0], "status slug"} {
+	for _, want := range theme.ArtLines {
 		if !strings.Contains(got, want) {
-			t.Fatalf("header missing wordmark component %q:\n%s", want, got)
+			t.Fatalf("header missing wordmark row %q:\n%s", want, got)
 		}
 	}
 }
@@ -503,11 +495,18 @@ func TestCompactStatsHeaderClickSortsRenderedColumn(t *testing.T) {
 	m := newTestModel()
 	m.zoomed = true
 	m.focused = panelStats
-	m.width = 51 // total pane width: inner width 49, so renderStatsPane uses compact layout.
+	m.width = 51
 	m.height = 20
-	innerW := m.width - 2
-	x := 1 + compactStatsNameWidth(innerW) + 9 // p95 header start in compact layout.
-	next, _ := m.handleClick(tea.Mouse{X: x, Y: 4, Button: tea.MouseLeft})
+	contentWidth := m.width - 3
+	columns, keys := statsColumnsForWidth(contentWidth)
+	p95Start := 0
+	for index, key := range keys {
+		if key == "p95" {
+			break
+		}
+		p95Start += columns[index].Width
+	}
+	next, _ := m.handleClick(tea.Mouse{X: 1 + p95Start, Y: 3, Button: tea.MouseLeft})
 	got := next.(model)
 	if got.prefs.statsSort != "p95" {
 		t.Fatalf("compact stats click sorted %q, want p95", got.prefs.statsSort)
@@ -518,15 +517,16 @@ func TestStatsHeaderClickUsesFullLayoutAtBoundaryWidth(t *testing.T) {
 	m := newTestModel()
 	m.zoomed = true
 	m.focused = panelStats
-	m.width = 52 // total pane width: inner width 50, so renderStatsPane uses the full table.
+	m.width = 92
 	m.height = 20
-	cols, keys := statsColumnsForWidth(m.width - 2)
+	contentWidth := m.width - 3
+	cols, keys := statsColumnsForWidth(contentWidth)
 	p95Start := 0
 	for i, key := range keys {
 		if key == "p95" {
 			break
 		}
-		p95Start += cols[i].Width + 1
+		p95Start += cols[i].Width
 	}
 	next, _ := m.handleClick(tea.Mouse{X: 1 + p95Start, Y: 3, Button: tea.MouseLeft})
 	got := next.(model)
@@ -598,22 +598,87 @@ func TestMenuOverlaysOpen(t *testing.T) {
 	}
 }
 
-func TestHeadingBracketsInRender(t *testing.T) {
+func TestPaneTitlesUseEmbeddedActivationLetters(t *testing.T) {
 	m := newTestModel()
 	frame := ansi.Strip(m.render())
-	for _, b := range []string{"[s]tatus", "[u]sage", "[f]avourites", "s[t]ats"} {
-		if !strings.Contains(frame, b) {
-			t.Errorf("frame missing heading %q", b)
+	for _, title := range []string{"status", "stats"} {
+		if !strings.Contains(frame, title) {
+			t.Errorf("frame missing heading %q", title)
+		}
+	}
+	for _, bracketed := range []string{"[s]tatus", "[u]sage", "[f]avourites", "s[t]ats"} {
+		if strings.Contains(frame, bracketed) {
+			t.Errorf("frame retained bracketed heading %q", bracketed)
 		}
 	}
 }
 
-func TestStackLayoutNarrow(t *testing.T) {
+func TestProgressiveLayoutAtNarrowSize(t *testing.T) {
 	m := newTestModel()
-	m.width = 80 // < 100 forces stack
+	m.width, m.height = 80, 24
 	frame := ansi.Strip(m.render())
-	if !strings.Contains(frame, "[s]tatus") {
-		t.Error("stack render missing status pane")
+	for _, title := range []string{"status", "stats"} {
+		if !strings.Contains(frame, title) {
+			t.Fatalf("80x24 frame missing %s pane", title)
+		}
+	}
+}
+
+func TestProgressivePaneAdmission(t *testing.T) {
+	cases := []struct {
+		width, height int
+		want          []panelID
+	}{
+		{60, 18, []panelID{panelStatus}},
+		{80, 24, []panelID{panelStatus, panelStats}},
+		{90, 27, []panelID{panelStatus, panelStats, panelUsage}},
+		{140, 45, []panelID{panelStatus, panelStats, panelUsage, panelFavourites}},
+	}
+	for _, tc := range cases {
+		m := newTestModel()
+		m.width, m.height = tc.width, tc.height
+		got := m.admittedPanels()
+		if len(got) != len(tc.want) {
+			t.Fatalf("%dx%d admitted %v, want %v", tc.width, tc.height, got, tc.want)
+		}
+		for index := range got {
+			if got[index] != tc.want[index] {
+				t.Fatalf("%dx%d admitted %v, want %v", tc.width, tc.height, got, tc.want)
+			}
+		}
+	}
+}
+
+func TestSplitRatiosChangeSameTerminalGeometry(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 140, 45
+	before := m.paneLayout()
+	view := m.activeViewDef()
+	view.TopRatio, view.LeftRatio, view.UsageRatio = 0.50, 0.55, 0.68
+	m.upsertUserView(view)
+	after := m.paneLayout()
+	if len(before) != len(after) {
+		t.Fatalf("pane count changed: before=%v after=%v", before, after)
+	}
+	same := true
+	for index := range before {
+		if before[index] != after[index] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatalf("ratio change did not alter geometry: %v", before)
+	}
+}
+
+func TestSplitDragUpdatesActiveView(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 140, 45
+	m.applySplitDrag("left", 77, headerLines+20)
+	got := m.activeViewDef()
+	if got.LeftRatio < 0.54 || got.LeftRatio > 0.56 {
+		t.Fatalf("left ratio after drag = %.3f, want about .55", got.LeftRatio)
 	}
 }
 
@@ -621,10 +686,10 @@ func TestViewPanelsOmission(t *testing.T) {
 	m := newTestModel()
 	m.st.UI.View = "stats-only"
 	frame := ansi.Strip(m.render())
-	if !strings.Contains(frame, "s[t]ats") {
+	if !strings.Contains(frame, "stats") {
 		t.Error("stats-only view should render stats")
 	}
-	if strings.Contains(frame, "[s]tatus") {
+	if strings.Contains(frame, "status") {
 		t.Error("stats-only view must omit status pane")
 	}
 }
@@ -648,5 +713,317 @@ func TestFrameWidthInvariant(t *testing.T) {
 		if got := lipgloss.Width(l); got > 100 {
 			t.Errorf("popup: line is %d cells wide: %.40q", got, l)
 		}
+	}
+}
+
+func TestResponsiveFrameSweep(t *testing.T) {
+	for width := 48; width <= 200; width++ {
+		for height := 14; height <= 60; height++ {
+			m := newTestModel()
+			m.width, m.height = width, height
+			frame := m.render()
+			lines := strings.Split(frame, "\n")
+			if len(lines) != height {
+				t.Fatalf("%dx%d rendered %d rows", width, height, len(lines))
+			}
+			for row, line := range lines {
+				if got := ansi.StringWidth(line); got != width {
+					t.Fatalf("%dx%d row %d width = %d", width, height, row, got)
+				}
+			}
+			plain := ansi.Strip(frame)
+			if strings.Contains(plain, "…") {
+				t.Fatalf("%dx%d rendered an ellipsis", width, height)
+			}
+			for _, wordmarkRow := range theme.ArtLines {
+				if !strings.Contains(plain, wordmarkRow) {
+					t.Fatalf("%dx%d lost wordmark row %q", width, height, wordmarkRow)
+				}
+			}
+		}
+	}
+}
+
+func TestEveryGraphSurfaceUsesConfiguredStyle(t *testing.T) {
+	m := newTestModel()
+	now := time.Now()
+	for _, latency := range []float64{40, 95, 180, 130, 260, 115} {
+		m.st.RecordCheck("OKProv", state.CheckResult{Status: "ok", LatencyMs: latency, CheckedAt: now}, 60)
+		m.st.RecordModelCheck("OKProv", "mock-alpha", state.CheckResult{Status: "ok", LatencyMs: latency, CheckedAt: now}, 60)
+	}
+	outputs := map[string]string{}
+	for _, style := range []string{"tty", "block", "braille"} {
+		m.cfg.Settings.GraphStyle = style
+		outputs[style] = ansi.Strip(m.renderStatusPane(90, 15, false)) +
+			ansi.Strip(m.renderFavouritesPane(70, 12, false)) +
+			ansi.Strip(m.renderStatsPane(70, 12, false))
+	}
+	if outputs["tty"] == outputs["block"] || outputs["tty"] == outputs["braille"] || outputs["block"] == outputs["braille"] {
+		t.Fatalf("graph surfaces did not change together across styles")
+	}
+}
+
+func TestStatsScrollbarIsInsetInsideBorder(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Providers[0].Models = append(m.cfg.Providers[0].Models,
+		config.Model{ID: "mock-beta", Favourite: true},
+		config.Model{ID: "mock-gamma", Favourite: true},
+	)
+	m.width, m.height = 80, 24
+	m.focused = panelStats
+	frame := ansi.Strip(m.render())
+	found := false
+	for _, line := range strings.Split(frame, "\n") {
+		if strings.HasSuffix(line, "█│") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("stats scrollbar thumb did not retain outer border:\n%s", frame)
+	}
+}
+
+func TestSstopUsesOneActionColour(t *testing.T) {
+	m := newTestModel()
+	frame := m.render()
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	for _, key := range []string{"m", "p", "c", "?", "s"} {
+		if !strings.Contains(frame, action.Render(key)) {
+			t.Fatalf("action key %q does not use the shared accent role", key)
+		}
+	}
+}
+
+func TestMouseDragPersistsSplitRatio(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("SSLUG_CONFIG_HOME", configHome)
+	m := newTestModel()
+	m.width, m.height = 140, 45
+	var stats paneRect
+	for _, rect := range m.paneLayout() {
+		if rect.panel == panelStats {
+			stats = rect
+			break
+		}
+	}
+	if stats.x == 0 {
+		t.Fatal("full layout has no vertical split")
+	}
+	next, _ := m.handleClick(tea.Mouse{X: stats.x, Y: headerLines + stats.y + 2, Button: tea.MouseLeft})
+	dragging := next.(model)
+	if dragging.dragSplit != "left" {
+		t.Fatalf("drag kind = %q, want left", dragging.dragSplit)
+	}
+	next, _ = dragging.handleMouseRelease(tea.Mouse{X: 77, Y: headerLines + stats.y + 2, Button: tea.MouseLeft})
+	released := next.(model)
+	if released.dragSplit != "" {
+		t.Fatalf("drag remained active: %q", released.dragSplit)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := loaded.FindView("full")
+	if view == nil || view.LeftRatio < 0.54 || view.LeftRatio > 0.56 {
+		t.Fatalf("persisted full view = %+v, want left ratio about .55", view)
+	}
+}
+
+func TestStatsKeyboardSelectionStaysInViewport(t *testing.T) {
+	m := newTestModel()
+	for index := range 8 {
+		m.cfg.Providers[0].Models = append(m.cfg.Providers[0].Models, config.Model{
+			ID: fmt.Sprintf("extra-%d", index), Favourite: true,
+		})
+	}
+	m.width, m.height = 80, 24
+	m.focused = panelStats
+	for range 8 {
+		m.moveSelection(1)
+	}
+	visible := m.selectableViewportHeight(panelStats)
+	if m.sel[panelStats] >= m.scroll[panelStats]+visible {
+		t.Fatalf("selection %d outside viewport [%d,%d)", m.sel[panelStats], m.scroll[panelStats], m.scroll[panelStats]+visible)
+	}
+}
+
+func TestLowerPaneTitleClickStillOpensMenu(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 140, 45
+	for _, rect := range m.paneLayout() {
+		if rect.panel != panelStats && rect.panel != panelFavourites {
+			continue
+		}
+		next, _ := m.handleClick(tea.Mouse{
+			X: rect.x + 3, Y: headerLines + rect.y, Button: tea.MouseLeft,
+		})
+		got := next.(model)
+		if got.dragSplit != "" || got.ov.kind != overlayMenu {
+			t.Fatalf("%s title click: drag=%q overlay=%v", panelNames[rect.panel], got.dragSplit, got.ov.kind)
+		}
+	}
+}
+
+func TestLatencySurfacesRetainAge(t *testing.T) {
+	m := newTestModel()
+	favourites := ansi.Strip(m.renderFavouritesPane(80, 12, false))
+	stats := ansi.Strip(m.renderStatsPane(90, 12, false))
+	for name, output := range map[string]string{"favourites": favourites, "stats": stats} {
+		if !strings.Contains(output, "age") || !strings.Contains(output, "just") {
+			t.Fatalf("%s dropped freshness:\n%s", name, output)
+		}
+	}
+}
+
+func TestNonFocusedPaneScrollUsesItsOwnHeight(t *testing.T) {
+	m := newTestModel()
+	for index := range 12 {
+		m.cfg.Providers[3].Meters = append(m.cfg.Providers[3].Meters, config.Meter{
+			Name: fmt.Sprintf("meter-%d", index), Unit: "req", Kind: "manual", Cap: 100,
+		})
+	}
+	m.width, m.height = 140, 45
+	m.focused = panelStats
+	if m.selectableViewportHeight(panelStats) == m.selectableViewportHeight(panelUsage) {
+		t.Fatal("test requires unequal pane heights")
+	}
+	content := m.renderUsagePane(80, 1<<20, false)
+	total := strings.Count(content, "\n") + 1
+	want := max(0, total-m.selectableViewportHeight(panelUsage))
+	if got := m.maxScroll(panelUsage); got != want {
+		t.Fatalf("usage maxScroll = %d, want %d from its own viewport", got, want)
+	}
+}
+
+func TestLegacyStatsSortPreferencesMigrateToVisibleColumns(t *testing.T) {
+	cases := map[string]string{
+		"ago":    "age",
+		"p50":    "p95",
+		"checks": "",
+		"ok%":    "",
+		"down":   "",
+	}
+	for legacy, want := range cases {
+		stateFile := state.New()
+		stateFile.UI.Panels = map[string]string{"stats.sort": legacy, "stats.dir": "asc"}
+		got := loadPrefs(stateFile)
+		if got.statsSort != want {
+			t.Fatalf("legacy stats sort %q migrated to %q, want %q", legacy, got.statsSort, want)
+		}
+	}
+}
+
+func TestInvalidVisualSettingsFallBackWithWarning(t *testing.T) {
+	cfg := config.Default()
+	cfg.Settings.BorderStyle = "wobbly"
+	cfg.Settings.GraphStyle = "pixels"
+	cfg.Providers = []config.Provider{{Name: "test", Enabled: true}}
+	m := New(cfg, state.New())
+	if m.cfg.Settings.BorderStyle != "rounded" || m.cfg.Settings.GraphStyle != "tty" {
+		t.Fatalf("invalid settings not normalized: %+v", m.cfg.Settings)
+	}
+	for _, want := range []string{"unknown border style", "unknown graph style"} {
+		if !strings.Contains(m.footer, want) {
+			t.Fatalf("footer missing %q warning: %q", want, m.footer)
+		}
+	}
+}
+
+func TestUsageRetainsProviderNoteAndProbeCounters(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Providers[3].Note = "home lab allocation"
+	providerState := m.st.Provider("Neuralwatt")
+	providerState.Counters = state.Counters{Checks: 6, OK: 4, Account: 1, Down: 1}
+	got := ansi.Strip(m.renderUsagePane(80, 30, false))
+	for _, want := range []string{"home lab allocation", "probes 4 ok · 1 account · 1 down"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("usage pane missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStatusGroupingChangesProviderOrder(t *testing.T) {
+	providers := []*config.Provider{
+		{Name: "zeta", Label: "b"},
+		{Name: "alpha", Label: "a"},
+		{Name: "beta", Label: "b"},
+	}
+	got := groupedProviders(providers)
+	names := []string{got[0].Name, got[1].Name, got[2].Name}
+	if strings.Join(names, ",") != "alpha,zeta,beta" {
+		t.Fatalf("grouped provider order = %v", names)
+	}
+}
+
+func TestOverflowScrollbarsExposeArrowsAndThumb(t *testing.T) {
+	m := newTestModel()
+	for index := range 12 {
+		m.cfg.Providers = append(m.cfg.Providers, config.Provider{
+			Name: fmt.Sprintf("extra-%02d", index), Enabled: true,
+			Models: []config.Model{{ID: fmt.Sprintf("model-%02d", index), Favourite: true}},
+		})
+	}
+	for name, output := range map[string]string{
+		"status":     ansi.Strip(m.renderStatusPane(60, 8, false)),
+		"usage":      ansi.Strip(m.renderUsagePane(60, 8, false)),
+		"favourites": ansi.Strip(m.renderFavouritesPane(60, 8, false)),
+	} {
+		for _, glyph := range []string{"▲", "█", "▼"} {
+			if !strings.Contains(output, glyph) {
+				t.Fatalf("%s overflow missing scrollbar %s:\n%s", name, glyph, output)
+			}
+		}
+	}
+}
+
+func TestPaneSplitConfirmationExpiresBySequence(t *testing.T) {
+	m := newTestModel()
+	m.footer = "pane splits saved"
+	m.footerSeq = 4
+	older, _ := m.Update(footerClearMsg{seq: 3})
+	if got := older.(model).footer; got == "" {
+		t.Fatal("older timer cleared newer footer")
+	}
+	current, _ := older.(model).Update(footerClearMsg{seq: 4})
+	if got := current.(model).footer; got != "" {
+		t.Fatalf("current timer left footer %q", got)
+	}
+}
+
+func TestEmptyActionsRenderInPanelBottomBorders(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 100, 30
+	m.cfg.Providers = nil
+	if got := ansi.Strip(m.renderPane(panelStatus, 80, 12)); !strings.Contains(got, "add provider or integration") {
+		t.Fatalf("status border missing action:\n%s", got)
+	}
+	m = newTestModel()
+	m.cfg.Providers[0].Models = nil
+	if got := ansi.Strip(m.renderPane(panelFavourites, 50, 10)); !strings.Contains(got, "set a favourite") {
+		t.Fatalf("favourites border missing action:\n%s", got)
+	}
+	m.st = state.New()
+	if got := ansi.Strip(m.renderPane(panelStats, 80, 12)); !strings.Contains(got, "check to measure") {
+		t.Fatalf("stats border missing action:\n%s", got)
+	}
+}
+
+func TestThemeNoticeExpiresAndMenuCycleStaysOpen(t *testing.T) {
+	m := newTestModel()
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
+		{"cycle theme", "main.theme"},
+	}}
+	next, cmd := m.menuKey("enter")
+	got := next.(model)
+	if got.ov.kind != overlayMenu {
+		t.Fatal("theme cycle closed menu")
+	}
+	if got.footer == "" || cmd == nil {
+		t.Fatalf("theme cycle did not schedule transient notice: footer=%q", got.footer)
+	}
+	cleared, _ := got.Update(cmd())
+	if cleared.(model).footer != "" {
+		t.Fatalf("theme notice persisted: %q", cleared.(model).footer)
 	}
 }

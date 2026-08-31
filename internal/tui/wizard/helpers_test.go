@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/chriisbusy/status-slug/internal/config"
+	"github.com/chriisbusy/status-slug/internal/theme"
 	"github.com/chriisbusy/status-slug/internal/tui/wizard"
 )
 
@@ -150,11 +151,13 @@ func TestWizardContentShowsDesignedModalHeader(t *testing.T) {
 	m := wizard.New(config.Default(), "")
 	got := ansi.Strip(m.Content())
 	for _, want := range []string{
-		"now provider",
+		theme.ArtLines[0],
+		"setup · add provider · first provider",
+		"1/6",
 		"◐ provider",
-		"WELCOME · first provider",
-		"flight plan",
-		"click focuses fields",
+		"what do you call it?",
+		"tab next",
+		"enter accept",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("wizard header missing %q in:\n%s", want, got)

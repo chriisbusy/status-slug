@@ -73,6 +73,22 @@ func (m model) overlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q", "?", "i":
 			m.ov = overlayState{}
 			return m, nil
+		case "r":
+			if m.ov.title == "integrations" {
+				return m, moshiStatusCmd()
+			}
+		case "f":
+			if m.ov.title == "integrations" {
+				targets := m.staleMoshiTargets()
+				if len(targets) == 0 {
+					m.footer = "no stale Moshi hooks"
+					m.footerSeq++
+					return m, footerClearCmd(m.footerSeq)
+				}
+				m.ov = overlayState{kind: overlayConfirm, action: "moshi.repair:" + strings.Join(targets, ","),
+					title: "Repair stale Moshi hooks?", body: "Runs moshi-hook install for: " + strings.Join(targets, ", ")}
+				return m, nil
+			}
 		case "enter":
 			// From the inspect overlay: re-probe the inspected target.
 			if m.ov.title == "inspect" && !m.checking {
@@ -149,7 +165,7 @@ func (m model) forwardToOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 type dashBlinkMsg struct{}
 
 func dashBlinkTick() tea.Cmd {
-	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return dashBlinkMsg{} })
+	return tea.Tick(600*time.Millisecond, func(time.Time) tea.Msg { return dashBlinkMsg{} })
 }
 
 // overlayFormWidth is the content width of overlay forms.
@@ -187,6 +203,9 @@ func (m model) runConfirm(action string) (tea.Model, tea.Cmd) {
 	switch {
 	case action == "quit":
 		return m, tea.Quit
+	case strings.HasPrefix(action, "moshi.repair:"):
+		targets := strings.Split(strings.TrimPrefix(action, "moshi.repair:"), ",")
+		return m, moshiRepairCmd(targets)
 	case strings.HasPrefix(action, "remove:"):
 		name := strings.TrimPrefix(action, "remove:")
 		if p := m.cfg.Find(name); p != nil {
@@ -342,6 +361,7 @@ func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 
 // runMenuAction executes a menu action id.
 func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
+	previousMenu := m.ov
 	m.ov = overlayState{}
 	switch {
 	case strings.HasPrefix(action, "main."):
@@ -357,11 +377,16 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 				return m, dashBlinkTick()
 			}
 		case "theme":
-			return m.cycleTheme(), nil
+			next := m.cycleTheme()
+			next.ov = previousMenu
+			return next, footerClearCmd(next.footerSeq)
 		case "view":
-			return m.cycleView(), nil
+			next := m.cycleView()
+			next.ov = previousMenu
+			return next, footerClearCmd(next.footerSeq)
 		case "integrations":
 			m.ov = m.newIntegrationsOverlay()
+			return m, moshiStatusCmd()
 		case "help":
 			m.ov = m.newHelpOverlay()
 		case "quit":
@@ -371,9 +396,11 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 	case strings.HasPrefix(action, "status.sort:"):
 		m.prefs.statusSort = strings.TrimPrefix(action, "status.sort:")
 		m.savePrefs()
+		m.ov = m.newMenuOverlay(panelStatus)
 	case action == "status.group":
 		m.prefs.statusGroup = !m.prefs.statusGroup
 		m.savePrefs()
+		m.ov = m.newMenuOverlay(panelStatus)
 	case action == "status.check":
 		if p := m.selectedProvider(); p != nil {
 			cmd := m.startCheckOne(*p)
@@ -465,13 +492,12 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 
 	case action == "stats.sort":
 		m.ov = overlayState{kind: overlayMenu, title: "stats sort", menuItems: []menuItem{
-			{"name", "stats.sortcol:name"},
-			{"checks", "stats.sortcol:checks"},
-			{"ok%", "stats.sortcol:ok%"},
-			{"p50", "stats.sortcol:p50"},
+			{"program", "stats.sortcol:name"},
+			{"provider", "stats.sortcol:provider"},
+			{"kind", "stats.sortcol:kind"},
+			{"status", "stats.sortcol:status"},
+			{"latency", "stats.sortcol:latency"},
 			{"p95", "stats.sortcol:p95"},
-			{"down", "stats.sortcol:down"},
-			{"ago", "stats.sortcol:ago"},
 		}}
 		return m, nil
 	case strings.HasPrefix(action, "stats.sortcol:"):
@@ -735,25 +761,26 @@ func (m model) newSettingsOverlay() overlayState {
 
 	viewNames := m.viewCycleOrder()
 	viewF := widgets.NewSelect(m.palette, "view", viewNames)
-	selectIdx(viewF, viewNames, m.activeViewDef().Name)
-
-	arrF := widgets.NewSelect(m.palette, "arrangement", []string{"grid", "stack"})
-	selectIdx(arrF, []string{"grid", "stack"}, m.activeViewDef().Arrangement)
-
-	compactF := widgets.NewConfirm(m.palette, "compact density", m.activeViewDef().Compact)
-
-	var splitOpts []string
-	for pct := 40; pct <= 80; pct += 5 {
-		splitOpts = append(splitOpts, fmt.Sprintf("%d%%", pct))
+	activeView := config.NormalizeView(m.activeViewDef())
+	selectIdx(viewF, viewNames, activeView.Name)
+	ratioField := func(label string, current float64, low int) *widgets.SelectField {
+		var options []string
+		for percent := low; percent <= 75; percent += 5 {
+			options = append(options, fmt.Sprintf("%d%%", percent))
+		}
+		field := widgets.NewSelect(m.palette, label, options)
+		selectIdx(field, options, fmt.Sprintf("%d%%", int(current*100+0.5)))
+		return field
 	}
-	splitF := widgets.NewSelect(m.palette, "main split", splitOpts)
-	selectIdx(splitF, splitOpts, fmt.Sprintf("%d%%", int(s2split(m.activeViewDef().MainSplit)*100)))
+	topRatioF := ratioField("top split", activeView.TopRatio, 20)
+	leftRatioF := ratioField("left split", activeView.LeftRatio, 25)
+	usageRatioF := ratioField("usage split", activeView.UsageRatio, 25)
 
 	borderF := widgets.NewSelect(m.palette, "border style", []string{"rounded", "square", "thick"})
 	selectIdx(borderF, []string{"rounded", "square", "thick"}, s.BorderStyle)
 
-	glyphF := widgets.NewSelect(m.palette, "graph glyphs", []string{"braille", "blocks", "ascii"})
-	selectIdx(glyphF, []string{"braille", "blocks", "ascii"}, s.GraphGlyphs)
+	glyphF := widgets.NewSelect(m.palette, "graph style", []string{"tty", "block", "braille"})
+	selectIdx(glyphF, []string{"tty", "block", "braille"}, s.GraphStyle)
 
 	bgF := widgets.NewConfirm(m.palette, "paint theme background", s.ThemeBackground)
 
@@ -800,11 +827,10 @@ func (m model) newSettingsOverlay() overlayState {
 	pStatsF := widgets.NewConfirm(m.palette, "panel: stats", panelToggles["stats"])
 
 	fields := []widgets.Field{
-		widgets.NewNote(m.palette, "appearance", "theme, layout, chrome"),
-		themeF, viewF, arrF, compactF, splitF, borderF, glyphF, bgF,
+		widgets.NewNote(m.palette, "appearance", "theme, continuous pane splits, chrome"),
+		themeF, viewF, topRatioF, leftRatioF, usageRatioF, borderF, glyphF, bgF,
 		widgets.NewNote(m.palette, "probing", "timeouts, refresh, key storage"),
-		timeoutF, refreshF, modeF, histF, keysF,
-		widgets.NewNote(m.palette, "integrations", "loopback api for moshi, tmux, scripts"),
+		widgets.NewNote(m.palette, "integrations", "press g for Moshi setup/status; loopback API setting below"),
 		serveF,
 		widgets.NewNote(m.palette, "behavior & panels", "toggles and pane visibility"),
 		nerdF, quitF, launchF, bellF, pStatusF, pUsageF, pFavF, pStatsF,
@@ -815,8 +841,9 @@ func (m model) newSettingsOverlay() overlayState {
 		title: "settings",
 		form:  widgets.NewForm(m.palette, "", "", fields...),
 		fields: map[string]widgets.Field{
-			"theme": themeF, "view": viewF, "arrangement": arrF, "compact": compactF,
-			"split": splitF, "border": borderF, "glyphs": glyphF, "themeBackground": bgF,
+			"theme": themeF, "view": viewF, "topRatio": topRatioF,
+			"leftRatio": leftRatioF, "usageRatio": usageRatioF,
+			"border": borderF, "glyphs": glyphF, "themeBackground": bgF,
 			"timeout": timeoutF, "refresh": refreshF, "mode": modeF, "history": histF,
 			"keys": keysF, "serveListen": serveF, "nerd": nerdF, "confirmQuit": quitF,
 			"checkOnLaunch": launchF, "alertBell": bellF,
@@ -825,13 +852,6 @@ func (m model) newSettingsOverlay() overlayState {
 		},
 		formFor: "settings",
 	}
-}
-
-func s2split(f float64) float64 {
-	if f < 0.4 || f > 0.8 {
-		return 0.66
-	}
-	return f
 }
 
 func intRange(lo, hi int) func(string) error {
@@ -904,7 +924,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		s := &m.cfg.Settings
 		s.Theme = get("theme")
 		s.BorderStyle = get("border")
-		s.GraphGlyphs = get("glyphs")
+		s.GraphStyle = get("glyphs")
 		s.ProbeTimeout, _ = strconv.Atoi(get("timeout"))
 		s.AutoRefresh, _ = strconv.Atoi(map[string]string{"off": "0", "30s": "30", "60s": "60", "300s": "300"}[get("refresh")])
 		s.ProbeMode = get("mode")
@@ -917,27 +937,32 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		s.ThemeBackground = getb("themeBackground")
 		s.ServeListen = strings.TrimSpace(get("serveListen"))
 
-		// Apply view changes: materialize into user views if builtin.
+		// Apply view changes: materialize a builtin when it is customized.
 		viewName := get("view")
 		v := m.activeViewDef()
 		if v.Name != viewName {
 			m.st.UI.View = viewName
 		} else {
 			var panels []string
-			for _, n := range panelNames {
-				if getb("panel:" + n) {
-					panels = append(panels, n)
+			for _, name := range panelNames {
+				if getb("panel:" + name) {
+					panels = append(panels, name)
 				}
 			}
 			if len(panels) > 0 {
 				v.Panels = panels
 			}
-			v.Arrangement = get("arrangement")
-			v.Compact = getb("compact")
-			if pct, err := strconv.Atoi(strings.TrimSuffix(get("split"), "%")); err == nil {
-				v.MainSplit = float64(pct) / 100
+			parseRatio := func(key string, fallback float64) float64 {
+				percent, err := strconv.Atoi(strings.TrimSuffix(get(key), "%"))
+				if err != nil {
+					return fallback
+				}
+				return float64(percent) / 100
 			}
-			m.upsertUserView(v)
+			v.TopRatio = parseRatio("topRatio", v.TopRatio)
+			v.LeftRatio = parseRatio("leftRatio", v.LeftRatio)
+			v.UsageRatio = parseRatio("usageRatio", v.UsageRatio)
+			m.upsertUserView(config.NormalizeView(v))
 		}
 
 		if err := config.Save(m.cfg); err != nil {
@@ -1018,7 +1043,11 @@ func enableDisableLabel(p *config.Provider) string {
 }
 
 func (m model) newIntegrationsOverlay() overlayState {
-	content := m.integrationsText()
+	return m.newIntegrationsOverlayWith(nil)
+}
+
+func (m model) newIntegrationsOverlayWith(status *moshiLocalStatus) overlayState {
+	content := m.integrationsText(status)
 	rendered, err := glamour.Render(content, "dark")
 	if err != nil {
 		rendered = content
@@ -1028,7 +1057,7 @@ func (m model) newIntegrationsOverlay() overlayState {
 	return overlayState{kind: overlayViewport, title: "integrations", vp: vp}
 }
 
-func (m model) integrationsText() string {
+func (m model) integrationsText(status *moshiLocalStatus) string {
 	addr := m.cfg.Settings.ServeListen
 	if addr == "" {
 		addr = "127.0.0.1:19777"
@@ -1041,20 +1070,39 @@ func (m model) integrationsText() string {
 			}
 		}
 	}
+	moshiSection := "## Moshi daemon and hooks\n\n- status: checking local moshi-hook…"
+	if status != nil {
+		moshiSection = formatMoshiStatus(*status)
+	}
 	return fmt.Sprintf(`# integrations
 
 Every dashboard snapshot is available to scripts and plugin surfaces.
 
+%s
+
+Controls: r refresh status · f repair stale hooks (confirmation required)
+## Moshi setup
+
+1. Moshi iPhone: Settings → Integrations → create pairing token.
+2. Pair: `+"`moshi-hook pair --token '<token>' --name '<host>'`"+`
+3. Start daemon: `+"`moshi-hook service install`"+`
+4. Install hooks: `+"`moshi-hook install`"+` or `+"`moshi-hook install --target claude,codex,omp`"+`
+5. Verify: `+"`moshi-hook probe`"+` and `+"`moshi-hook status`"+`
+
+Status-slug reads these states only; it does not modify Moshi or agent hooks.
+
+## Status-slug outputs
+
 - Loopback HTTP: %s
   - start with %s
   - GET %s and %s
-- Moshi/iOS: %s emits moshi-hook usage snapshots.
-- tmux/status lines: %s gives compact dots.
-- JSON: %s prints the full status contract.
-- Doctor: %s checks config, keys, meters, and serve settings.
+- Moshi usage payload: %s
+- tmux/status lines: %s
+- JSON: %s
+- Doctor: %s
 
 Auto meters configured: %d
-`, "`"+addr+"`", "`sslug serve`", "`/status.json`", "`/usage.json`",
+`, moshiSection, "`"+addr+"`", "`sslug serve`", "`/status.json`", "`/usage.json`",
 		"`sslug usage --format moshi`", "`sslug status --format tmux`",
 		"`sslug status --format json`", "`sslug doctor`", autoMeters)
 }
@@ -1177,25 +1225,28 @@ func (m model) renderOverlay(base string) string {
 	case overlayViewport:
 		content = m.ov.vp.View()
 	case overlayMenu:
-		var b strings.Builder
-		for i, item := range m.ov.menuItems {
-			label := item.label
-			if item.action == "stats.sort" {
-				label += " ›"
-			}
-			if i == m.ov.menuSel {
-				b.WriteString(lipgloss.NewStyle().
-					Background(lipgloss.Color(m.palette[theme.SelectedBg])).
-					Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
-					Render("> " + label))
-			} else {
-				b.WriteString("  " + label)
-			}
-			b.WriteString("\n")
+		var builder strings.Builder
+		menuWidth := 0
+		for _, item := range m.ov.menuItems {
+			menuWidth = max(menuWidth, lipgloss.Width(item.label))
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
+		normal := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+		selected := lipgloss.NewStyle().
+			Background(lipgloss.Color(m.palette[theme.SelectedBg])).
+			Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
+			Bold(true)
+		for index, item := range m.ov.menuItems {
+			line := fitCells(item.label, menuWidth)
+			if index == m.ov.menuSel {
+				builder.WriteString(selected.Render(line))
+			} else {
+				builder.WriteString(normal.Render(line))
+			}
+			builder.WriteString("\n")
+		}
+		builder.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
 			Render("\nj/k navigate · enter select · esc close"))
-		content = b.String()
+		content = builder.String()
 	case overlayInput:
 		content = m.ov.input.View(m.overlayFormWidth()) + "\n\n" +
 			lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).

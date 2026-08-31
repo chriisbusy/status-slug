@@ -76,16 +76,31 @@ var ArtLines = []string{
 	"▄▄█ ▄▄█ █▄▄ █▄█ █▄█",
 }
 
-// Art renders the SSLUG block art with the theme's own brand gradient plus the
-// muted wordmark. It is deliberately a single coherent sweep, not per-letter
-// severity colors: the logo is chrome, not a status dashboard.
-func Art(p Palette) string {
-	body := strings.Join(ArtLines, "\n")
-	painted := GradientText(body, p[GradLo], p[GradHi])
-	word := lipgloss.NewStyle().Foreground(lipgloss.Color(p[Muted])).Render("  · status slug")
-	lines := strings.Split(painted, "\n")
-	if len(lines) > 1 {
-		lines[1] += word
+// ActionGradientText paints each line with a TTY-style faint→normal→bold
+// intensity sweep while retaining one theme color.
+func ActionGradientText(text, colour string) string {
+	lines := strings.Split(text, "\n")
+	for lineIndex, line := range lines {
+		runes := []rune(line)
+		var out strings.Builder
+		for index, char := range runes {
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color(colour))
+			switch {
+			case (index >= 4 && index <= 6) || (lineIndex == 1 && index <= 2):
+				style = style.Bold(true)
+			case index*3 < len(runes):
+				style = style.Faint(true)
+			case index*3 >= len(runes)*2:
+				style = style.Bold(true)
+			}
+			out.WriteString(style.Render(string(char)))
+		}
+		lines[lineIndex] = out.String()
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Art renders the exact SSLUG mark in the theme's action color.
+func Art(p Palette) string {
+	return ActionGradientText(strings.Join(ArtLines, "\n"), p[Accent])
 }

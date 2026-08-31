@@ -167,7 +167,7 @@ func (m Model) StepName() string {
 type blinkMsg struct{}
 
 func blinkTick() tea.Cmd {
-	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return blinkMsg{} })
+	return tea.Tick(600*time.Millisecond, func(time.Time) tea.Msg { return blinkMsg{} })
 }
 
 func (m Model) Init() tea.Cmd { return blinkTick() }
@@ -266,19 +266,15 @@ func (m Model) formHeight() int {
 // formLocal converts screen coords to form-local coords (the popup is
 // centered; the dashboard passes raw screen coords through).
 func (m Model) formLocal(x, y int) (int, int) {
-	// The popup box: width = form width + padding 2 + border 2, centered.
-	boxW := m.formWidth() + 4
-	startX := (m.width - boxW) / 2
-	if startX < 0 {
-		startX = 0
-	}
-	// Estimate popup height from form height + header.
-	boxH := m.formHeight() + 9
-	startY := (m.height - boxH) / 2
-	if startY < 0 {
-		startY = 0
-	}
-	return x - startX - 2, y - startY - 1
+	// Popup width = form width + horizontal padding (4) + borders (2).
+	boxWidth := m.formWidth() + 6
+	startX := max(0, (m.width-boxWidth)/2)
+	// Header is followed by one blank line before the form; popup adds borders.
+	headerHeight := strings.Count(m.header(), "\n") + 1
+	boxHeight := m.formHeight() + headerHeight + 5
+	startY := max(0, (m.height-boxHeight)/2)
+	formStartY := startY + 1 + headerHeight + 1
+	return x - startX - 3, y - formStartY
 }
 
 // stepCompleted runs after a form completes: harvest, transition, dispatch.
@@ -374,64 +370,54 @@ type modelsResultMsg struct {
 
 func (m Model) header() string {
 	art := theme.Art(m.palette)
-	stepIdx := int(m.step)
+	stepIndex := int(m.step)
 	if m.step == stepKeyDetail {
-		stepIdx = int(stepKeySource)
+		stepIndex = int(stepKeySource)
 	}
 	if m.step == stepMeterForm {
-		stepIdx = int(stepMeters)
+		stepIndex = int(stepMeters)
 	}
-	if stepIdx > len(stepNames)-1 {
-		stepIdx = len(stepNames) - 1
-	}
-	stepTitle := stepNames[stepIdx]
-	stepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
-	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).Bold(true)
-	futureStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	stepIndex = min(stepIndex, len(stepNames)-1)
+	active := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	done := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).Bold(true)
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	key := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).Bold(true)
-
-	var rail []string
-	for i, n := range stepNames {
-		mark := "○"
-		style := futureStyle
-		if i < stepIdx {
-			mark = "●"
-			style = doneStyle
-		} else if i == stepIdx {
-			mark = "◐"
-			style = stepStyle
-		}
-		rail = append(rail, style.Render(mark+" "+n))
-	}
-	mode := "ADD PROVIDER"
-	modeDetail := "source + key + models + meters"
-	if m.data.providerCount == 0 {
-		mode = "WELCOME"
-		modeDetail = "first provider"
+	mode := "add provider"
+	detail := "first provider"
+	if m.data.providerCount > 0 {
+		detail = fmt.Sprintf("%d configured", m.data.providerCount)
 	}
 	if m.reconfigure != "" {
-		mode = "EDIT " + m.reconfigure
-		modeDetail = "update provider"
+		mode = "edit provider"
+		detail = m.reconfigure
 	}
-	modeLine := title.Render(mode) + muted.Render(" · ") + muted.Render(modeDetail)
-	current := muted.Render("now ") + stepStyle.Render(stepTitle)
-	if m.data.name != "" {
-		current += muted.Render(" · provider ") + title.Render(m.data.name)
+	meta := active.Render("setup") + muted.Render(" · ") + title.Render(mode) +
+		muted.Render(" · "+detail) + muted.Render(fmt.Sprintf("   %d/%d", stepIndex+1, len(stepNames)))
+	var rail []string
+	for index, name := range stepNames {
+		mark, style := "○", muted
+		if index < stepIndex {
+			mark, style = "●", done
+		} else if index == stepIndex {
+			mark, style = "◐", active
+		}
+		rail = append(rail, style.Render(mark+" "+name))
 	}
-	progress := muted.Render("flight plan ") + strings.Join(rail, muted.Render(" ━ "))
-	hint := key.Render("tab") + muted.Render(" next · ") +
-		key.Render("shift+tab") + muted.Render(" back · ") +
-		key.Render("enter") + muted.Render(" accept · ") +
-		key.Render("esc") + muted.Render(" abort · ") +
-		key.Render("click") + muted.Render(" focuses fields")
-	return art + "\n\n" + modeLine + "\n" + current + "\n" + progress + "\n" + hint + "\n"
+	return art + "\n" + meta + "\n" + strings.Join(rail, muted.Render("  ─  "))
+}
+
+func (m Model) footerHint() string {
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	return action.Render("tab") + muted.Render(" next  ·  ") +
+		action.Render("shift+tab") + muted.Render(" back  ·  ") +
+		action.Render("enter") + muted.Render(" accept  ·  ") +
+		action.Render("esc") + muted.Render(" abort")
 }
 
 // Content renders the wizard as an embeddable string.
 func (m Model) Content() string {
-	return m.header() + "\n" + m.body()
+	return m.header() + "\n\n" + m.body() + "\n\n" + m.footerHint()
 }
 
 func (m Model) body() string {

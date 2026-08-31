@@ -78,10 +78,15 @@ Four panes, all configurable; presets cycle with `p`:
 
 | Pane | What it shows |
 |---|---|
-| **status** | `●/◐/○` health per provider with reason text, latency, and age |
-| **usage** | Meters per provider — any unit, capped or not, with reset cycles and value age |
-| **favourites** | Latency cockpit: status dot, last latency, braille sparkline ring |
-| **stats** | Checks / ok% / p50 / p95 / down counts per provider and favourite |
+| **status** | Provider health, p95 history, age, and row-level latency gauges |
+| **usage** | Discrete square-cell meters with caps, reset cycles, and value age |
+| **favourites** | Last latency, p95, and configurable TTY/block/braille history |
+| **stats** | Dense provider/model process table with selection and viewport scrollbar |
+
+Panes progressively admit as terminal space becomes available: one focused pane
+at the minimum size, then status + stats, then usage, then all four. Drag pane
+boundaries with the mouse to persist the top, left/right, and usage/favourites
+split ratios per view.
 
 Keys: `tab` cycle focus · `j/k` scroll · `c`/`⏎` check now · `i` inspect ·
 `m` main menu · `s/u/f/t` pane menus · `p` view presets · `e` cycle themes
@@ -184,17 +189,64 @@ That's the point of the `custom` kind: give it a base URL and, optionally,
 a key. If it speaks `GET /models` and `POST /chat/completions`, it's a
 first-class citizen.
 
-**What's moshi format?**
-`sslug usage --format moshi` emits usage snapshots in the
-[moshi](https://github.com/chriisbusy/moshi)-hook schema (`accountId`,
-`accountLabel`, `windows[]`, `cost{}`), ready for iOS sync pipelines.
-`sslug serve` exposes the same data over loopback HTTP for always-on
-consumers.
+**What's the Moshi integration status?**
+`sslug usage --format moshi` emits moshi-hook-compatible usage snapshots
+(`accountId`, `accountLabel`, `windows[]`, `cost{}`), and `sslug serve` exposes
+the same snapshots over loopback at `/usage.json`. This producer side is
+complete. Moshi does not currently provide a custom-source ingestion seam, so
+automatic surfacing inside Moshi/iOS remains externally blocked as roadmap M9;
+sslug does not imply that consumer-side support is already delivered.
+The dashboard's `g` integrations view independently reads
+`moshi-hook probe --json` and `moshi-hook status --json`, so daemon, gateway,
+pairing, version, socket, and per-agent hook states are visible even though
+custom usage ingestion remains blocked.
+
+### Moshi daemon and hook setup
+
+Prerequisite: `moshi-hook` must be installed and available on `PATH`.
+
+1. In the Moshi iPhone app, open **Settings → Integrations** and create a
+   pairing token.
+2. Pair this host:
+
+   ```sh
+   moshi-hook pair --token '<pairing-token>' --name '<host-name>'
+   ```
+
+   On a headless Linux host, add `--store file` when no keychain is available.
+3. Install and start the background daemon:
+
+   ```sh
+   moshi-hook service install
+   ```
+
+4. Install hooks for every detected supported agent, or choose explicit
+   targets:
+
+   ```sh
+   moshi-hook install
+   moshi-hook install --target claude,codex,omp
+   ```
+
+   Use `--local` to scope supported hook configurations to the current project.
+5. Verify Moshi directly:
+
+   ```sh
+   moshi-hook probe
+   moshi-hook status
+   ```
+
+6. Launch `sslug` and press `g`. The integrations view shows daemon, gateway,
+   pairing, socket, version, and every hook state. Stale or missing hooks include
+   the exact `moshi-hook install --target …` remediation command.
+
+Status-slug only reads Moshi's JSON status interfaces. It never pairs hosts,
+installs services, rewrites agent hooks, or syncs usage on the user's behalf.
 
 ## Acknowledgements
 
-The design DNA — dense bordered panes, braille sparklines, gradient chrome,
-everything-configurable — is a loving tribute to
+The design DNA — dense bordered panes, previous/current pair-cell graphs,
+gradient chrome, and configurable TTY/block/braille rendering — is a loving tribute to
 [**btop**](https://github.com/aristocratos/btop) by Aristocratos, which proved
 system monitors could be beautiful. `sslug` applies the same craft to a
 different machine room. Built on the [Charm](https://charm.land) stack

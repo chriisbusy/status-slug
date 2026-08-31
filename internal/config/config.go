@@ -33,20 +33,20 @@ type Settings struct {
 	CheckOnLaunch bool   `toml:"check_on_launch"`
 	AlertBell     bool   `toml:"alert_bell"`
 	BorderStyle   string `toml:"border_style"`
-	GraphGlyphs   string `toml:"graph_glyphs"`
+	GraphStyle    string `toml:"graph_style"`
 	// ThemeBackground paints the theme's bg color over the whole terminal
 	// when true; false (default) lets the terminal's own background through.
 	ThemeBackground bool   `toml:"theme_background"`
 	ServeListen     string `toml:"serve_listen,omitempty"` // saved by serve --listen
 }
 
-// View is a named panel arrangement preset.
+// View is a named, progressively admitted panel arrangement.
 type View struct {
-	Name        string   `toml:"name"`
-	Panels      []string `toml:"panels"`
-	Arrangement string   `toml:"arrangement"`
-	Compact     bool     `toml:"compact"`
-	MainSplit   float64  `toml:"main_split"`
+	Name       string   `toml:"name"`
+	Panels     []string `toml:"panels"`
+	TopRatio   float64  `toml:"top_ratio"`
+	LeftRatio  float64  `toml:"left_ratio"`
+	UsageRatio float64  `toml:"usage_ratio"`
 }
 
 // Provider is one configured LLM provider.
@@ -95,7 +95,7 @@ func Default() Config {
 			HistoryLength: 60,
 			KeysSource:    "auto",
 			BorderStyle:   "rounded",
-			GraphGlyphs:   "braille",
+			GraphStyle:    "tty",
 		},
 	}
 }
@@ -138,6 +138,57 @@ func LoadFrom(path string) (Config, error) {
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	var stored struct {
+		Settings struct {
+			GraphStyle  string `toml:"graph_style"`
+			GraphGlyphs string `toml:"graph_glyphs"`
+		} `toml:"settings"`
+		Views []struct {
+			TopRatio    float64 `toml:"top_ratio"`
+			LeftRatio   float64 `toml:"left_ratio"`
+			UsageRatio  float64 `toml:"usage_ratio"`
+			MainSplit   float64 `toml:"main_split"`
+			Arrangement string  `toml:"arrangement"`
+			Compact     bool    `toml:"compact"`
+		} `toml:"views"`
+	}
+	if err := toml.Unmarshal(data, &stored); err != nil {
+		return Config{}, fmt.Errorf("parse config settings %s: %w", path, err)
+	}
+	if stored.Settings.GraphStyle == "" && stored.Settings.GraphGlyphs != "" {
+		switch stored.Settings.GraphGlyphs {
+		case "braille":
+			cfg.Settings.GraphStyle = "braille"
+		case "blocks":
+			cfg.Settings.GraphStyle = "block"
+		default:
+			cfg.Settings.GraphStyle = "tty"
+		}
+	}
+	for i := range cfg.Views {
+		if i < len(stored.Views) {
+			legacy := stored.Views[i]
+			if cfg.Views[i].LeftRatio == 0 && legacy.LeftRatio == 0 &&
+				legacy.MainSplit >= 0.25 && legacy.MainSplit <= 0.80 {
+				cfg.Views[i].LeftRatio = legacy.MainSplit
+				if cfg.Views[i].LeftRatio > 0.75 {
+					cfg.Views[i].LeftRatio = 0.75
+				}
+			}
+			if legacy.Arrangement == "stack" || legacy.Compact {
+				if legacy.TopRatio == 0 {
+					cfg.Views[i].TopRatio = 0.40
+				}
+				if legacy.LeftRatio == 0 {
+					cfg.Views[i].LeftRatio = 0.50
+				}
+				if legacy.UsageRatio == 0 {
+					cfg.Views[i].UsageRatio = 0.50
+				}
+			}
+		}
+		cfg.Views[i] = NormalizeView(cfg.Views[i])
+	}
 	return cfg, nil
 }
 
@@ -177,6 +228,20 @@ func writeAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// NormalizeView fills unset or invalid split ratios with stable defaults.
+func NormalizeView(v View) View {
+	if v.TopRatio < 0.20 || v.TopRatio > 0.75 {
+		v.TopRatio = 0.33
+	}
+	if v.LeftRatio < 0.25 || v.LeftRatio > 0.75 {
+		v.LeftRatio = 0.37
+	}
+	if v.UsageRatio < 0.25 || v.UsageRatio > 0.75 {
+		v.UsageRatio = 0.46
+	}
+	return v
 }
 
 // Find returns the provider with the given name, or nil.

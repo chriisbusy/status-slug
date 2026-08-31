@@ -37,8 +37,8 @@ type Field interface {
 	Tick() bool
 }
 
-// blinkRate is the cursor blink half-period in tea ticks.
-const blinkRate = 5
+// blinkRate is measured in the 600ms cursor ticks scheduled by the hosts.
+const blinkRate = 1
 
 // --- shared style helpers ---
 
@@ -50,14 +50,14 @@ func newStyles(p theme.Palette) styles {
 	fg := func(c string) lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color(c)) }
 	return styles{
 		label:       fg(p[theme.Title]).Bold(true),
-		value:       fg(p[theme.Fg]),
+		value:       fg(p[theme.Fg]).Bold(true),
 		placeholder: fg(p[theme.Muted]),
 		muted:       fg(p[theme.Muted]),
 		accent:      fg(p[theme.Accent]).Bold(true),
-		ok:          fg(p[theme.OK]),
-		err:         fg(p[theme.Err]),
-		selBg:       fg(p[theme.SelectedFg]).Background(lipgloss.Color(p[theme.SelectedBg])),
-		selFg:       fg(p[theme.SelectedFg]),
+		ok:          fg(p[theme.OK]).Bold(true),
+		err:         fg(p[theme.Err]).Bold(true),
+		selBg:       fg(p[theme.SelectedFg]).Background(lipgloss.Color(p[theme.SelectedBg])).Bold(true),
+		selFg:       fg(p[theme.SelectedFg]).Bold(true),
 	}
 }
 
@@ -104,13 +104,15 @@ func (t *TextField) Focus()          { t.focused = true; t.blink = 0 }
 func (t *TextField) Blur()           { t.focused = false }
 func (t *TextField) Focused() bool   { return t.focused }
 
-// Tick implements Field: toggles cursor visibility.
+// Tick advances blink state and redraws only when cursor visibility changes.
 func (t *TextField) Tick() bool {
 	if !t.focused {
 		return false
 	}
+	wasVisible := t.blink%(2*blinkRate) < blinkRate
 	t.blink++
-	return true
+	isVisible := t.blink%(2*blinkRate) < blinkRate
+	return wasVisible != isVisible
 }
 
 func (t *TextField) Height(w int) int {
@@ -150,6 +152,17 @@ func (t *TextField) View(w int) string {
 	if ci >= vis {
 		start = ci - vis + 1
 	}
+	if v == "" {
+		placeholder := []rune(t.Placeholder)
+		if limit := max(0, vis-1); len(placeholder) > limit {
+			placeholder = placeholder[:limit]
+		}
+		cursor := " "
+		if t.focused && t.blink%(2*blinkRate) < blinkRate {
+			cursor = t.st.accent.Render("▏")
+		}
+		return label + "\n " + cursor + t.st.placeholder.Render(string(placeholder))
+	}
 	var b strings.Builder
 	b.WriteString(" ")
 	shown := false
@@ -168,9 +181,6 @@ func (t *TextField) View(w int) string {
 		}
 		if i < len(runes) {
 			b.WriteString(t.st.value.Render(string(runes[i])))
-		} else if i == start && v == "" {
-			b.WriteString(t.st.placeholder.Render(t.Placeholder))
-			break
 		} else {
 			b.WriteString(" ")
 		}

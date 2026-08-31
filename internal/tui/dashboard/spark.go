@@ -1,141 +1,119 @@
 package dashboard
 
-// spark.go — pure braille sparkline renderer.
-// Maps a []float64 ring buffer to a string of braille cells (2×4 dots per cell).
+import "math"
 
-// brailleBase is U+2800; dots are set by bit position.
-const brailleBase = 0x2800
-
-// dotBit maps (col, row) within a 2×4 cell to the braille dot bit.
-var dotBit = [2][4]int{
-	{0, 1, 2, 6}, // left column: dots 1,2,3,7
-	{3, 4, 5, 7}, // right column: dots 4,5,6,8
-}
-
-// Spark renders values as a sparkline of exactly width cells using the
-// configured glyph set: "braille" (2×4 dots), "blocks" (▁▂▃▄▅▆▇█), or
-// "ascii" (" .:-=+*#%@"). Unknown sets fall back to braille.
-func Spark(values []float64, width int, set string) string {
-	switch set {
-	case "blocks":
-		return sparkRamp(values, width, []rune(" ▁▂▃▄▅▆▇█"))
-	case "ascii":
-		return sparkRamp(values, width, []rune(" .:-=+*#%@"))
-	default:
-		return sparkBraille(values, width)
+// Spark renders a one-row previous/current pair graph of exactly width cells.
+func Spark(values []float64, width int, style string) string {
+	maximum := 0.0
+	for _, value := range values {
+		maximum = max(maximum, value)
 	}
-}
-
-// sparkRamp renders one glyph per column using a leveled ramp.
-func sparkRamp(values []float64, width int, ramp []rune) string {
-	if width <= 0 {
+	if maximum <= 0 {
+		maximum = 1
+	}
+	rows := PairGraph(values, width, 1, maximum, style, false)
+	if len(rows) == 0 {
 		return ""
 	}
-	out := make([]rune, width)
-	if len(values) == 0 {
-		for i := range out {
-			out[i] = ramp[0]
-		}
-		return string(out)
-	}
-	lo, hi := values[0], values[0]
-	for _, v := range values {
-		if v < lo {
-			lo = v
-		}
-		if v > hi {
-			hi = v
-		}
-	}
-	rng := hi - lo
-	sampled := resample(values, width)
-	levels := len(ramp) - 1
-	for i, v := range sampled {
-		var lvl int
-		if rng == 0 {
-			lvl = levels / 2
-		} else {
-			lvl = int((v - lo) / rng * float64(levels))
-			if lvl > levels {
-				lvl = levels
-			}
-		}
-		out[i] = ramp[lvl]
-	}
-	return string(out)
+	return rows[0]
 }
 
-// sparkBraille is the original 2×4-dot renderer.
-func sparkBraille(values []float64, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if len(values) == 0 {
-		return string(repeatBraille(width, 0))
-	}
-
-	lo, hi := values[0], values[0]
-	for _, v := range values {
-		if v < lo {
-			lo = v
-		}
-		if v > hi {
-			hi = v
-		}
-	}
-	rng := hi - lo
-
-	// Resample values to width*2 columns.
-	cols := width * 2
-	sampled := resample(values, cols)
-
-	cells := make([]int, width)
-	for c := 0; c < cols; c++ {
-		v := sampled[c]
-		// Normalize to 0..3 (4 row levels).
-		var level int
-		if rng == 0 {
-			level = 2 // flat: mid-height
-		} else {
-			level = int((v - lo) / rng * 3.999)
-		}
-		cellIdx := c / 2
-		colIdx := c % 2
-		// Fill dots from bottom (row 3) up to the level.
-		for row := 3; row >= 3-level; row-- {
-			cells[cellIdx] |= 1 << dotBit[colIdx][row]
-		}
-	}
-
-	runes := make([]rune, width)
-	for i, bits := range cells {
-		runes[i] = rune(brailleBase + bits)
-	}
-	return string(runes)
-}
-
-// resample stretches or compresses values to exactly n columns by
-// nearest-neighbor sampling.
-func resample(values []float64, n int) []float64 {
-	if n <= 0 || len(values) == 0 {
+// PairGraph renders btop's 5x5 previous/current sample cells. Each terminal
+// cell encodes one level from the previous sample and one from the current.
+func PairGraph(values []float64, width, rows int, maximum float64, style string, invert bool) []string {
+	if width <= 0 || rows <= 0 {
 		return nil
 	}
-	out := make([]float64, n)
-	for i := range out {
-		idx := int(float64(i) / float64(n) * float64(len(values)))
-		if idx >= len(values) {
-			idx = len(values) - 1
+	if maximum <= 0 {
+		maximum = 1
+	}
+	symbols := pairSymbols(style, invert)
+	lines := make([][]rune, rows)
+	for y := range lines {
+		lines[y] = make([]rune, width)
+		for x := range lines[y] {
+			lines[y][x] = ' '
 		}
-		out[i] = values[idx]
+	}
+	if len(values) == 0 {
+		return graphStrings(lines)
+	}
+	start := 0
+	if len(values) < width {
+		start = width - len(values)
+	}
+	for column := range width - start {
+		x := start + column
+		currentIndex := column
+		if len(values) > width {
+			if width == 1 {
+				currentIndex = len(values) - 1
+			} else {
+				currentIndex = int(math.Round(float64(x) * float64(len(values)-1) / float64(width-1)))
+			}
+		}
+		previousIndex := max(0, currentIndex-1)
+		previous := clampLevel(values[previousIndex], maximum)
+		current := clampLevel(values[currentIndex], maximum)
+		for horizon := range rows {
+			currentHigh := int(math.Round(100 * float64(rows-horizon) / float64(rows)))
+			currentLow := int(math.Round(100 * float64(rows-(horizon+1)) / float64(rows)))
+			level := func(value int) int {
+				if value >= currentHigh {
+					return 4
+				}
+				if value <= currentLow {
+					return 0
+				}
+				return min(4, max(0, int(math.Round(float64(value-currentLow)*4/float64(currentHigh-currentLow)+0.1))))
+			}
+			lines[horizon][x] = symbols[level(previous)*5+level(current)]
+		}
+	}
+	if invert {
+		for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+			lines[i], lines[j] = lines[j], lines[i]
+		}
+	}
+	return graphStrings(lines)
+}
+
+func clampLevel(value, maximum float64) int {
+	ratio := value / maximum
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	return int(math.Round(ratio * 100))
+}
+
+func graphStrings(lines [][]rune) []string {
+	out := make([]string, len(lines))
+	for i := range lines {
+		out[i] = string(lines[i])
 	}
 	return out
 }
 
-// repeatBraille returns n blank braille characters.
-func repeatBraille(n, bits int) []rune {
-	runes := make([]rune, n)
-	for i := range runes {
-		runes[i] = rune(brailleBase + bits)
+func pairSymbols(style string, invert bool) []rune {
+	var symbols string
+	switch style {
+	case "braille":
+		if invert {
+			symbols = " ⠈⠘⠸⢸⠁⠉⠙⠹⢹⠃⠋⠛⠻⢻⠇⠏⠟⠿⢿⡇⡏⡟⡿⣿"
+		} else {
+			symbols = " ⢀⢠⢰⢸⡀⣀⣠⣰⣸⡄⣄⣤⣴⣼⡆⣆⣦⣶⣾⡇⣇⣧⣷⣿"
+		}
+	case "block":
+		if invert {
+			symbols = " ▝▝▐▐▘▀▀▜▜▘▀▀▜▜▌▛▛██▌▛▛██"
+		} else {
+			symbols = " ▗▗▐▐▖▄▄▟▟▖▄▄▟▟▌▙▙██▌▙▙██"
+		}
+	default:
+		symbols = " ░░▒▒░░▒▒█░▒▒▒█▒▒▒██▒████"
 	}
-	return runes
+	return []rune(symbols)
 }

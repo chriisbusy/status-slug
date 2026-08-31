@@ -28,8 +28,8 @@ func TestRoundtrip(t *testing.T) {
 		}},
 	}}
 	cfg.Views = []config.View{{
-		Name: "full", Panels: []string{"status", "usage", "favourites"},
-		Arrangement: "grid", MainSplit: 0.66,
+		Name: "full", Panels: []string{"status", "stats", "usage", "favourites"},
+		TopRatio: 0.35, LeftRatio: 0.40, UsageRatio: 0.45,
 	}}
 
 	dir := t.TempDir()
@@ -68,7 +68,8 @@ func TestRoundtrip(t *testing.T) {
 	if len(p.Models) != 1 || p.Models[0].ID != "gpt-5-mini" || !p.Models[0].Favourite {
 		t.Errorf("models: %+v", p.Models)
 	}
-	if len(got.Views) != 1 || got.Views[0].Name != "full" || got.Views[0].MainSplit != 0.66 {
+	if len(got.Views) != 1 || got.Views[0].Name != "full" ||
+		got.Views[0].TopRatio != 0.35 || got.Views[0].LeftRatio != 0.40 || got.Views[0].UsageRatio != 0.45 {
 		t.Errorf("views: %+v", got.Views)
 	}
 }
@@ -80,6 +81,82 @@ func TestLoadFromMissing(t *testing.T) {
 	}
 	if cfg.Settings.Theme != "sstop" {
 		t.Errorf("default theme: got %q", cfg.Settings.Theme)
+	}
+}
+
+func TestViewAndGraphDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("version = 1\n\n[settings]\ntheme = \"sstop\"\n\n[[views]]\nname = \"legacy\"\npanels = [\"status\", \"stats\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Settings.GraphStyle != "tty" {
+		t.Fatalf("graph style default = %q, want tty", got.Settings.GraphStyle)
+	}
+	if len(got.Views) != 1 || got.Views[0].TopRatio != 0.33 || got.Views[0].LeftRatio != 0.37 || got.Views[0].UsageRatio != 0.46 {
+		t.Fatalf("normalized view = %+v", got.Views)
+	}
+}
+
+func TestLegacyGraphGlyphsMigrates(t *testing.T) {
+	for legacy, want := range map[string]string{"braille": "braille", "blocks": "block", "ascii": "tty"} {
+		t.Run(legacy, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			body := "version = 1\n\n[settings]\ngraph_glyphs = \"" + legacy + "\"\n"
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := config.LoadFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Settings.GraphStyle != want {
+				t.Fatalf("legacy %q migrated to %q, want %q", legacy, got.Settings.GraphStyle, want)
+			}
+		})
+	}
+}
+
+func TestLegacyViewLayoutMigratesToRatios(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `version = 1
+
+[[views]]
+name = "wide"
+panels = ["status", "stats", "usage"]
+arrangement = "grid"
+main_split = 0.65
+
+[[views]]
+name = "compact"
+panels = ["status", "stats", "usage", "favourites"]
+arrangement = "stack"
+compact = true
+
+[[views]]
+name = "edge"
+panels = ["status", "stats"]
+arrangement = "grid"
+main_split = 0.80
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Views[0].LeftRatio != 0.65 || got.Views[0].TopRatio != 0.33 || got.Views[0].UsageRatio != 0.46 {
+		t.Fatalf("legacy grid migration = %+v", got.Views[0])
+	}
+	if got.Views[1].TopRatio != 0.40 || got.Views[1].LeftRatio != 0.50 || got.Views[1].UsageRatio != 0.50 {
+		t.Fatalf("legacy stack migration = %+v", got.Views[1])
+	}
+	if got.Views[2].LeftRatio != 0.75 {
+		t.Fatalf("legacy 0.80 split should clamp to new maximum: %+v", got.Views[2])
 	}
 }
 

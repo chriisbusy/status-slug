@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,9 +37,8 @@ const (
 
 var panelNames = [panelCount]string{"status", "usage", "favourites", "stats"}
 
-// panelTitleSegs decomposes a panel heading into (before, key, after) so the
-// bound key renders highlighted in place — btop's convention:
-// [s]tatus, [u]sage, [f]avourites, s[t]ats.
+// panelTitleSegs decomposes a panel heading so only its activation letter uses
+// btop's action color while the title remains normal foreground.
 func panelTitleSegs(p panelID) (before, key, after string) {
 	switch p {
 	case panelStatus:
@@ -72,16 +72,12 @@ func (m model) panelChrome(p panelID) string {
 	return m.palette[theme.Accent]
 }
 
-// styledTitle renders a panel heading using that panel's chrome color.
-func (m model) styledTitle(p panelID, extra string) string {
+// styledTitle renders a panel title with one action-colored activation letter.
+func (m model) styledTitle(p panelID) string {
 	before, key, after := panelTitleSegs(p)
-	chrome := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(p))).Bold(true)
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(p)))
-	out := title.Render(before) + chrome.Render("["+key+"]") + title.Render(after)
-	if extra != "" {
-		out += title.Render(extra)
-	}
-	return out
+	activation := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	return title.Render(before) + activation.Render(key) + title.Render(after)
 }
 
 // Messages.
@@ -94,6 +90,11 @@ type autoUsageMsg struct {
 	updates []provider.MeterUpdate
 }
 type tickMsg time.Time
+type footerClearMsg struct{ seq int }
+
+func footerClearCmd(seq int) tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return footerClearMsg{seq: seq} })
+}
 
 // model is the root bubbletea model.
 type model struct {
@@ -122,17 +123,20 @@ type model struct {
 	wiz *wizard.Model
 
 	// Footer one-shot message (warnings, confirmations).
-	footer string
+	footer    string
+	footerSeq int
 
 	// Panel prefs persisted in state (sort, group).
 	prefs panelPrefs
 
 	// lastCheck for auto-refresh bookkeeping.
-	lastCheck time.Time
+	lastCheck   time.Time
+	moshiStatus *moshiLocalStatus
 
 	// Resize debounce state.
 	resizeSeq          int
 	pendingW, pendingH int
+	dragSplit          string
 }
 
 // hitRegion is a clickable rectangle.
@@ -219,6 +223,23 @@ func (m *model) closeWizard() {
 
 // New builds the root model (exported for tests).
 func New(cfg config.Config, st *state.File) model {
+	var settingWarnings []string
+	switch cfg.Settings.BorderStyle {
+	case "", "rounded":
+		cfg.Settings.BorderStyle = "rounded"
+	case "square", "thick":
+	default:
+		settingWarnings = append(settingWarnings, fmt.Sprintf("unknown border style %q — using rounded", cfg.Settings.BorderStyle))
+		cfg.Settings.BorderStyle = "rounded"
+	}
+	switch cfg.Settings.GraphStyle {
+	case "", "tty":
+		cfg.Settings.GraphStyle = "tty"
+	case "block", "braille":
+	default:
+		settingWarnings = append(settingWarnings, fmt.Sprintf("unknown graph style %q — using tty", cfg.Settings.GraphStyle))
+		cfg.Settings.GraphStyle = "tty"
+	}
 	palette, warns := theme.LoadFromSettings(cfg.Settings)
 	m := model{
 		cfg:        cfg,
@@ -229,12 +250,21 @@ func New(cfg config.Config, st *state.File) model {
 	}
 	m.spin = spinner.New(spinner.WithSpinner(spinner.Line))
 	m.prefs = loadPrefs(st)
+	for _, providerState := range st.Providers {
+		if providerState != nil && providerState.LastCheck != nil &&
+			providerState.LastCheck.CheckedAt.After(m.lastCheck) {
+			m.lastCheck = providerState.LastCheck.CheckedAt
+		}
+	}
 	if len(warns) > 0 {
-		m.footer = warns[0].Message
+		settingWarnings = append(settingWarnings, warns[0].Message)
 	}
 	if m.activeViewDef().Name == "full" && st.UI.View != "" && st.UI.View != "full" &&
 		m.viewByName(st.UI.View) == nil {
-		m.footer = fmt.Sprintf("unknown view %q — using full", st.UI.View)
+		settingWarnings = append(settingWarnings, fmt.Sprintf("unknown view %q — using full", st.UI.View))
+	}
+	if len(settingWarnings) > 0 {
+		m.footer = strings.Join(settingWarnings, " · ")
 	}
 	// First run: the setup wizard opens as a popup over the dashboard.
 	if len(cfg.Providers) == 0 {
@@ -259,8 +289,17 @@ func loadPrefs(st *state.File) panelPrefs {
 	if v := get("favourites.sort"); v != "" {
 		p.favSort = v
 	}
-	if v := get("stats.sort"); v != "" {
-		p.statsSort = v
+	if value := get("stats.sort"); value != "" {
+		switch value {
+		case "ago":
+			p.statsSort = "age"
+		case "p50":
+			p.statsSort = "p95"
+		case "name", "provider", "kind", "status", "latency", "history", "p95", "age":
+			p.statsSort = value
+		default:
+			p.statsSort = ""
+		}
 	}
 	if get("stats.favs") == "0" {
 		p.statsShowFavs = false
@@ -300,6 +339,10 @@ func (m *model) savePrefs() {
 // Init implements tea.Model.
 func (m model) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	cmds = append(cmds, moshiStatusCmd())
+	if m.footer != "" {
+		cmds = append(cmds, footerClearCmd(m.footerSeq))
+	}
 	if m.wiz != nil {
 		// Wizard opened at construction (first run): start its form
 		// lifecycle (cursor blink, field focus) too.
@@ -326,7 +369,17 @@ type resizeApplyMsg struct{ seq int }
 const resizeDebounce = 80 * time.Millisecond
 
 // Update implements tea.Model.
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
+	previousFooter, previousSeq := m.footer, m.footerSeq
+	defer func() {
+		updated, ok := next.(model)
+		if !ok || updated.footer == "" || updated.footer == previousFooter || updated.footerSeq != previousSeq {
+			return
+		}
+		updated.footerSeq++
+		next = updated
+		cmd = tea.Batch(cmd, footerClearCmd(updated.footerSeq))
+	}()
 	// Resize: debounce — repaint once after the drag settles, not on every
 	// intermediate size (the flicker the operator reported).
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
@@ -349,6 +402,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if statusMessage, ok := msg.(moshiStatusMsg); ok {
+		if m.moshiStatus != nil && statusMessage.status.CheckedAt.Before(m.moshiStatus.CheckedAt) {
+			return m, nil
+		}
+		m.moshiStatus = &statusMessage.status
+		if m.ov.kind == overlayViewport && m.ov.title == "integrations" {
+			m.ov = m.newIntegrationsOverlayWith(&statusMessage.status)
+		}
+		return m, nil
+	}
 
 	// Wizard popup is modal: it gets every other message first.
 	if m.wiz != nil {
@@ -368,6 +431,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseClickMsg:
 		return m.handleClick(msg.Mouse())
+	case tea.MouseMotionMsg:
+		return m.handleMouseMotion(msg.Mouse())
+	case tea.MouseReleaseMsg:
+		return m.handleMouseRelease(msg.Mouse())
 	case tea.MouseWheelMsg:
 		return m.handleWheel(msg.Mouse())
 
@@ -375,6 +442,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCheckResult(msg)
 	case autoUsageMsg:
 		return m.handleAutoUsage(msg)
+	case moshiRepairMsg:
+		if msg.err != "" {
+			m.footer = msg.err
+		} else {
+			m.footer = "Moshi hooks repaired"
+			m.ov = m.newIntegrationsOverlay()
+		}
+		m.footerSeq++
+		return m, tea.Batch(footerClearCmd(m.footerSeq), moshiStatusCmd())
+	case footerClearMsg:
+		if msg.seq == m.footerSeq {
+			m.footer = ""
+		}
+		return m, nil
 
 	case checkNowMsg:
 		cmd := m.startCheckAll()
@@ -409,6 +490,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Overlay consumes keys first.
 	if m.ov.kind != overlayNone {
 		return m.overlayKey(msg)
+	}
+	if m.footer != "" {
+		m.footer = ""
 	}
 
 	key := msg.String()
@@ -468,13 +552,14 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = m.newInspectOverlay()
 	case "g":
 		m.ov = m.newIntegrationsOverlay()
+		return m, moshiStatusCmd()
 	case "m":
 		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
 			{"add provider", "main.add"},
 			{"settings", "main.settings"},
 			{"cycle theme", "main.theme"},
 			{"cycle view", "main.view"},
-			{"integrations", "main.integrations"},
+			{"Moshi / integrations", "main.integrations"},
 			{"help", "main.help"},
 			{"quit", "main.quit"},
 		}}
@@ -490,7 +575,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		return m.cycleView(), nil
 	case "e":
-		return m.cycleTheme(), nil
+		next := m.cycleTheme()
+		return next, footerClearCmd(next.footerSeq)
 	case "o":
 		m.ov = m.newSettingsOverlay()
 		if m.ov.kind == overlayForm {
@@ -525,15 +611,19 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// nextVisiblePanel cycles focus across panels present in the active view.
+// nextVisiblePanel cycles admitted panes, or every configured pane while the
+// terminal can display only one pane.
 func (m model) nextVisiblePanel(dir int) panelID {
-	visible := m.visiblePanels()
+	visible := m.admittedPanels()
+	if len(visible) <= 1 {
+		visible = m.visiblePanels()
+	}
 	if len(visible) == 0 {
 		return panelStatus
 	}
 	idx := 0
-	for i, p := range visible {
-		if p == m.focused {
+	for i, panel := range visible {
+		if panel == m.focused {
 			idx = i
 		}
 	}
@@ -566,26 +656,23 @@ func panelByName(name string) panelID {
 
 // moveSelection moves selection in the focused pane, clamping.
 func (m *model) moveSelection(delta int) {
-	maxIdx := m.maxSelection(m.focused)
-	if maxIdx < 0 {
+	maxIndex := m.maxSelection(m.focused)
+	if maxIndex < 0 {
 		return
 	}
 	m.sel[m.focused] += delta
 	if m.sel[m.focused] < 0 {
 		m.sel[m.focused] = 0
 	}
-	if m.sel[m.focused] > maxIdx {
-		m.sel[m.focused] = maxIdx
+	if m.sel[m.focused] > maxIndex {
+		m.sel[m.focused] = maxIndex
 	}
-	vis := m.paneContentHeight()
-	if vis <= 0 {
-		return
-	}
+	visible := m.selectableViewportHeight(m.focused)
 	if m.sel[m.focused] < m.scroll[m.focused] {
 		m.scroll[m.focused] = m.sel[m.focused]
 	}
-	if m.sel[m.focused] >= m.scroll[m.focused]+vis {
-		m.scroll[m.focused] = m.sel[m.focused] - vis + 1
+	if m.sel[m.focused] >= m.scroll[m.focused]+visible {
+		m.scroll[m.focused] = m.sel[m.focused] - visible + 1
 	}
 }
 
@@ -603,24 +690,40 @@ func (m model) maxSelection(p panelID) int {
 	return 0
 }
 
-// pageSize for PgUp/PgDn.
+// pageSize returns the focused pane's real selectable viewport.
 func (m model) pageSize() int {
-	if h := m.paneContentHeight(); h > 2 {
-		return h - 1
+	return max(1, m.selectableViewportHeight(m.focused))
+}
+
+func (m model) selectableViewportHeight(panel panelID) int {
+	height := m.paneContentHeightFor(panel)
+	switch panel {
+	case panelStatus:
+		reserved := min(len(m.moshiDashboardLines(1)), max(0, height-1))
+		height -= 1 + reserved
+	case panelFavourites:
+		height--
+	case panelStats:
+		height -= 2
 	}
-	return 5
+	return max(1, height)
 }
 
 // headerLines is the dashboard header height in rows.
 const headerLines = 2
 
-// paneContentHeight is the inner height of a normal (non-zoomed) pane.
+// paneContentHeight returns the focused pane's actual inner height.
 func (m model) paneContentHeight() int {
-	h := (m.height-headerLines-1)/2 - 2
-	if h < 1 {
-		return 1
+	return m.paneContentHeightFor(m.focused)
+}
+
+func (m model) paneContentHeightFor(panel panelID) int {
+	for _, rect := range m.paneLayout() {
+		if rect.panel == panel {
+			return max(1, rect.h-2)
+		}
 	}
-	return h
+	return 1
 }
 
 // --- checking ---
@@ -865,6 +968,7 @@ func (m model) cycleTheme() model {
 	m.cfg.Settings.Theme = next
 	if err := config.Save(m.cfg); err != nil {
 		m.footer = "save config: " + err.Error()
+		m.footerSeq++
 		return m
 	}
 	pal, warns := theme.LoadFromSettings(m.cfg.Settings)
@@ -874,27 +978,28 @@ func (m model) cycleTheme() model {
 	} else {
 		m.footer = "theme: " + next
 	}
+	m.footerSeq++
 	return m
 }
 
-// activeViewDef resolves the active view, falling back to full.
+// activeViewDef resolves and normalizes the active view, falling back to full.
 func (m model) activeViewDef() config.View {
 	name := m.st.UI.View
 	if name == "" {
 		name = "full"
 	}
 	if v := m.viewByName(name); v != nil {
-		return *v
+		return config.NormalizeView(*v)
 	}
-	return builtinViews()[0]
+	return config.NormalizeView(builtinViews()[0])
 }
 
 func builtinViews() []config.View {
 	return []config.View{
-		{Name: "full", Panels: []string{"status", "usage", "favourites", "stats"}, Arrangement: "grid", MainSplit: 0.50},
-		{Name: "compact", Panels: []string{"status", "usage", "favourites", "stats"}, Arrangement: "stack", Compact: true, MainSplit: 0.66},
-		{Name: "status-only", Panels: []string{"status"}, Arrangement: "stack", MainSplit: 1.0},
-		{Name: "stats-only", Panels: []string{"stats"}, Arrangement: "stack", MainSplit: 1.0},
+		{Name: "full", Panels: []string{"status", "stats", "usage", "favourites"}, TopRatio: 0.33, LeftRatio: 0.37, UsageRatio: 0.46},
+		{Name: "compact", Panels: []string{"status", "stats", "usage", "favourites"}, TopRatio: 0.40, LeftRatio: 0.50, UsageRatio: 0.50},
+		{Name: "status-only", Panels: []string{"status"}, TopRatio: 0.33, LeftRatio: 0.37, UsageRatio: 0.46},
+		{Name: "stats-only", Panels: []string{"stats"}, TopRatio: 0.33, LeftRatio: 0.37, UsageRatio: 0.46},
 	}
 }
 
@@ -1036,22 +1141,9 @@ func (m model) View() tea.View {
 
 // render produces the full frame.
 func (m model) render() string {
-	view := m.activeViewDef()
-	stack := m.width < 100 || m.height < 24 || view.Arrangement == "stack" || m.zoomed
-
 	header := m.renderHeader()
+	body := m.renderLayout()
 	footer := m.renderFooter()
-
-	var body string
-	switch {
-	case m.zoomed:
-		body = m.renderPane(m.focused, headerLines, m.width, m.height-headerLines-1, view.Compact)
-	case stack:
-		body = m.renderStack(view)
-	default:
-		body = m.renderGrid(view)
-	}
-
 	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	if m.ov.kind != overlayNone {
 		frame = m.renderOverlay(frame)
@@ -1176,101 +1268,111 @@ func min(a, b int) int {
 }
 
 func (m model) headerNav() []headerButton {
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	checkText := accent.Render("[c]") + muted.Render("heck")
+	checkText := action.Render("c") + title.Render("heck")
 	if m.checking {
-		checkText = m.spin.View() + muted.Render(" checking")
+		checkText = m.spin.View() + title.Render(" checking")
 	}
 	return []headerButton{
-		{accent.Render("[m]") + muted.Render("enu"), "menu"},
-		{accent.Render("[p]") + muted.Render("reset ") + title.Render(m.activeViewDef().Name), "cycle-view"},
-		{accent.Render("[g]") + muted.Render("ateways"), "integrations"},
+		{action.Render("m") + title.Render("enu"), "menu"},
+		{action.Render("p") + title.Render("resets"), "cycle-view"},
+		{action.Render("g") + title.Render("ateways"), "integrations"},
 		{checkText, "check-button"},
-		{accent.Render("[?]"), "help"},
+		{action.Render("?") + title.Render(" help"), "help"},
 	}
 }
 
 func (m model) headerRows() ([]string, []hitRegion) {
 	ok, account, down, unknown := m.healthCounts()
-	meterCount, autoMeters, favCount := m.meterCounts()
-	g := m.glyphs()
-
+	meterCount, _, favouriteCount := m.meterCounts()
+	glyphs := m.glyphs()
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
 	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).Bold(true)
 	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn])).Bold(true)
 	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Err])).Bold(true)
-	unkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Unknown]))
+	unknownStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Unknown]))
 
-	chip := func(label, value string, st lipgloss.Style) string {
-		return muted.Render(label+" ") + st.Render(value)
-	}
-	health := chip("providers", fmt.Sprintf("%d", len(m.cfg.Providers)), title) + muted.Render(" │ ") +
-		okStyle.Render(fmt.Sprintf("%s%d", g.ok, ok)) + " " +
-		warnStyle.Render(fmt.Sprintf("%s%d", g.account, account)) + " " +
-		errStyle.Render(fmt.Sprintf("%s%d", g.down, down))
+	health := title.Render("fleet ") +
+		okStyle.Render(fmt.Sprintf("%s%d", glyphs.ok, ok)) + muted.Render("  ") +
+		warnStyle.Render(fmt.Sprintf("%s%d", glyphs.account, account)) + muted.Render("  ") +
+		errStyle.Render(fmt.Sprintf("%s%d", glyphs.down, down))
 	if unknown > 0 {
-		health += " " + unkStyle.Render(fmt.Sprintf("%s%d", g.unknown, unknown))
+		health += muted.Render("  ") + unknownStyle.Render(fmt.Sprintf("%s%d", glyphs.unknown, unknown))
 	}
-	meters := chip("fav", fmt.Sprintf("%d", favCount), lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelFavourites))).Bold(true)) +
-		muted.Render(" │ ") +
-		chip("meters", fmt.Sprintf("%d", meterCount), lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelUsage))).Bold(true))
-	if autoMeters > 0 {
-		meters += muted.Render(fmt.Sprintf(" (%d auto)", autoMeters))
-	}
+	checked := "not checked"
 	if !m.lastCheck.IsZero() {
-		meters += muted.Render(" │ checked " + state.RelAge(time.Since(m.lastCheck)))
+		checked = "checked " + state.RelAge(time.Since(m.lastCheck))
 	}
-
-	actions := ""
-	var regs []hitRegion
-	for i, b := range m.headerNav() {
-		if i > 0 {
-			actions += muted.Render("  ")
-		}
-		start := ansi.StringWidth(actions)
-		actions += b.text
-		regs = append(regs, hitRegion{kind: b.kind, x: start, y: 1, w: ansi.StringWidth(b.text), h: 1})
-	}
-	lineTop := health + muted.Render("   ") + meters
-	lineBot := actions + muted.Render("   theme ") + title.Render(m.cfg.Settings.Theme) + muted.Render(" · ") + time.Now().Format("15:04")
+	context := title.Render(fmt.Sprintf("%d providers", len(m.cfg.Providers))) +
+		muted.Render(fmt.Sprintf("  ·  %d meters  ·  %d favourites  ·  %s", meterCount, favouriteCount, checked))
+	clock := title.Render(time.Now().Format("15:04:05"))
 
 	artLines := strings.Split(theme.Art(m.palette), "\n")
 	for len(artLines) < headerLines {
 		artLines = append(artLines, "")
 	}
-	artW := 0
-	for _, l := range artLines[:headerLines] {
-		if w := ansi.StringWidth(l); w > artW {
-			artW = w
+	artWidth := 0
+	for _, line := range artLines[:headerLines] {
+		artWidth = max(artWidth, ansi.StringWidth(line))
+	}
+	artWidth += 2
+	place := func(art, left, right string) string {
+		art = fitCells(art, artWidth)
+		available := max(0, m.width-artWidth)
+		rightWidth := min(available, ansi.StringWidth(right))
+		right = ansi.Truncate(right, rightWidth, "")
+		leftWidth := max(0, available-rightWidth)
+		if rightWidth > 0 && leftWidth > 0 {
+			leftWidth--
+		}
+		left = ansi.Truncate(left, leftWidth, "")
+		gap := max(0, available-ansi.StringWidth(left)-ansi.StringWidth(right))
+		return fitCells(art+left+strings.Repeat(" ", gap)+right, m.width)
+	}
+	renderButtons := func(buttons []headerButton) (string, []int) {
+		var text string
+		var offsets []int
+		for index, button := range buttons {
+			if index > 0 {
+				text += "  "
+			}
+			offsets = append(offsets, ansi.StringWidth(text))
+			text += button.text
+		}
+		return text, offsets
+	}
+
+	var rows []string
+	var regions []hitRegion
+	if m.width < 110 {
+		menu := m.headerNav()[:1]
+		menuText, menuOffsets := renderButtons(menu)
+		viewButton := headerButton{action.Render("p") + title.Render(" views"), "cycle-view"}
+		viewText, viewOffsets := renderButtons([]headerButton{viewButton})
+		bottomLeft := viewText + muted.Render("  ·  "+checked)
+		rows = []string{
+			place(artLines[0], health, menuText),
+			place(artLines[1], bottomLeft, clock),
+		}
+		menuX := m.width - ansi.StringWidth(menuText)
+		regions = append(regions, hitRegion{kind: menu[0].kind, x: menuX + menuOffsets[0], y: 0, w: ansi.StringWidth(menu[0].text), h: 1})
+		regions = append(regions, hitRegion{kind: viewButton.kind, x: artWidth + viewOffsets[0], y: 1, w: ansi.StringWidth(viewButton.text), h: 1})
+	} else {
+		buttons := m.headerNav()
+		actions, offsets := renderButtons(buttons)
+		rows = []string{
+			place(artLines[0], health, actions),
+			place(artLines[1], context, clock),
+		}
+		actionX := m.width - ansi.StringWidth(actions)
+		for index, button := range buttons {
+			regions = append(regions, hitRegion{kind: button.kind, x: actionX + offsets[index], y: 0, w: ansi.StringWidth(button.text), h: 1})
 		}
 	}
-	artW += 2
-	padArt := func(s string) string {
-		if pad := artW - ansi.StringWidth(s); pad > 0 {
-			return s + strings.Repeat(" ", pad)
-		}
-		return s
-	}
-	maxSummary := m.width - artW
-	if maxSummary < 10 {
-		maxSummary = 10
-	}
-	rows := []string{
-		truncate(padArt(artLines[0])+truncate(lineTop, maxSummary), m.width),
-		truncate(padArt(artLines[1])+truncate(lineBot, maxSummary), m.width),
-	}
-	for i := range regs {
-		regs[i].x += artW
-		if regs[i].x >= m.width {
-			regs[i].w = 0
-		} else if regs[i].x+regs[i].w > m.width {
-			regs[i].w = m.width - regs[i].x
-		}
-	}
-	return rows, regs
+	return rows, regions
 }
 
 func (m model) renderHeader() string {
@@ -1350,113 +1452,67 @@ func fitActionLine(parts []string, width int, sep string) string {
 	return line
 }
 
-// renderStack renders panels vertically in view order.
-func (m model) renderStack(view config.View) string {
-	panels := m.visiblePanels()
-	avail := m.height - headerLines - 1
-	if avail < len(panels)*3 {
-		avail = len(panels) * 3
+// renderLayout renders every admitted pane from the shared geometry plan.
+func (m model) renderLayout() string {
+	type renderedPane struct {
+		rect  paneRect
+		lines []string
 	}
-	per := avail / len(panels)
-	var parts []string
-	y := headerLines
-	for i, p := range panels {
-		h := per
-		if i == len(panels)-1 {
-			h = avail - per*(len(panels)-1)
-		}
-		parts = append(parts, m.renderPane(p, y, m.width, h, view.Compact))
-		y += h
+	rects := m.paneLayout()
+	_, bodyHeight := m.bodySize()
+	rendered := make([]renderedPane, 0, len(rects))
+	for _, rect := range rects {
+		rendered = append(rendered, renderedPane{
+			rect:  rect,
+			lines: strings.Split(m.renderPane(rect.panel, rect.w, rect.h), "\n"),
+		})
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
-}
-
-// renderGrid renders the 2-column grid: round-robin from view panel order.
-func (m model) renderGrid(view config.View) string {
-	panels := m.visiblePanels()
-	var left, right []panelID
-	for i, p := range panels {
-		if i%2 == 0 {
-			left = append(left, p)
-		} else {
-			right = append(right, p)
-		}
-	}
-	if len(right) == 0 && len(left) > 1 {
-		right = left[len(left)/2:]
-		left = left[:len(left)/2]
-	}
-	if len(left) == 0 {
-		left = right
-		right = nil
-	}
-
-	split := view.MainSplit
-	if split < 0.4 || split > 0.8 {
-		split = 0.66
-	}
-	leftW := int(float64(m.width) * split)
-	rightW := m.width - leftW
-	avail := m.height - headerLines - 1
-
-	renderCol := func(panels []panelID, w, y0 int) string {
-		if len(panels) == 0 {
-			return ""
-		}
-		per := avail / len(panels)
-		var parts []string
-		y := y0
-		for i, p := range panels {
-			h := per
-			if i == len(panels)-1 {
-				h = avail - per*(len(panels)-1)
+	rows := make([]string, bodyHeight)
+	for y := range bodyHeight {
+		var segments []renderedPane
+		for _, pane := range rendered {
+			if y >= pane.rect.y && y < pane.rect.y+pane.rect.h {
+				segments = append(segments, pane)
 			}
-			parts = append(parts, m.renderPane(p, y, w, h, view.Compact))
-			y += h
 		}
-		return lipgloss.JoinVertical(lipgloss.Left, parts...)
+		sort.Slice(segments, func(i, j int) bool { return segments[i].rect.x < segments[j].rect.x })
+		var line string
+		x := 0
+		for _, segment := range segments {
+			if segment.rect.x > x {
+				line += strings.Repeat(" ", segment.rect.x-x)
+			}
+			localY := y - segment.rect.y
+			paneLine := ""
+			if localY < len(segment.lines) {
+				paneLine = fitCells(segment.lines[localY], segment.rect.w)
+			}
+			line += paneLine
+			x = segment.rect.x + segment.rect.w
+		}
+		rows[y] = fitCells(line, m.width)
 	}
-
-	l := renderCol(left, leftW, headerLines)
-	r := renderCol(right, rightW, headerLines)
-	if r == "" {
-		return l
-	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, l, r)
+	return strings.Join(rows, "\n")
 }
 
-// renderPane renders one box. y0 is its absolute screen row (for hit regions).
-func (m model) renderPane(p panelID, y0, w, h int, compact bool) string {
-	title := m.styledTitle(p, m.paneTitleExtra(p))
-
-	innerW := w - 2
-	innerH := h - 2
-	if innerW < 4 {
-		innerW = 4
-	}
-	if innerH < 1 {
-		innerH = 1
-	}
-
+// renderPane renders one semantic btop-style pane.
+func (m model) renderPane(p panelID, w, h int) string {
+	title := m.styledTitle(p)
+	innerW := max(4, w-2)
+	innerH := max(1, h-2)
+	compact := innerW < 70
 	content := m.paneContent(p, innerW, innerH, compact)
 	contentLines := strings.Split(content, "\n")
 	for i, line := range contentLines {
-		if lipgloss.Width(line) > innerW {
-			contentLines[i] = truncate(line, innerW)
-		}
+		contentLines[i] = fitCells(line, innerW)
 	}
 	for len(contentLines) < innerH {
-		contentLines = append(contentLines, "")
+		contentLines = append(contentLines, strings.Repeat(" ", innerW))
 	}
 	if len(contentLines) > innerH {
 		contentLines = contentLines[:innerH]
 	}
-
-	borderColor := m.palette[theme.BoxBorder]
-	if p == m.focused {
-		borderColor = m.panelChrome(p)
-	}
+	borderColor := m.panelChrome(p)
 	bs := lipgloss.RoundedBorder()
 	switch m.cfg.Settings.BorderStyle {
 	case "square":
@@ -1464,49 +1520,51 @@ func (m model) renderPane(p panelID, y0, w, h int, compact bool) string {
 	case "thick":
 		bs = lipgloss.ThickBorder()
 	}
-
-	// lipgloss v2 Width/Height include the border — w is the total.
 	box := lipgloss.NewStyle().
 		Border(bs).
 		BorderForeground(lipgloss.Color(borderColor)).
 		Width(w).
 		Height(h).
 		Render(strings.Join(contentLines, "\n"))
-
-	// Replace the top border line with the title-embedded version, built
-	// from separately-styled segments (never spliced into styled text).
 	lines := strings.Split(box, "\n")
 	if len(lines) > 0 {
 		lines[0] = buildTitleBorder(w, title, borderColor, bs)
+		if hint := m.paneBottomHint(p); hint != "" && len(lines) > 1 {
+			lines[len(lines)-1] = buildBottomBorder(w, hint, borderColor, bs)
+		}
 	}
 	return strings.Join(lines, "\n")
 }
 
-func (m model) paneTitleExtra(p panelID) string {
-	switch p {
+func (m model) paneBottomHint(panel panelID) string {
+	var text string
+	switch panel {
 	case panelStatus:
-		ok, account, down, unknown := m.healthCounts()
-		extra := fmt.Sprintf(" · %d ok · %d acct · %d down", ok, account, down)
-		if unknown > 0 {
-			extra += fmt.Sprintf(" · %d unknown", unknown)
+		if len(m.cfg.Providers) == 0 {
+			text = "add provider or integration"
 		}
-		if m.checking {
-			extra += " · checking"
-		}
-		return extra
-	case panelUsage:
-		total, auto, _ := m.meterCounts()
-		return fmt.Sprintf(" · %d meters · %d auto", total, auto)
-	case panelFavourites:
-		return fmt.Sprintf(" · %d watched", len(m.favouriteList()))
 	case panelStats:
-		sort := m.prefs.statsSort
-		if sort == "" {
-			sort = "natural"
+		checks := 0
+		for _, providerState := range m.st.Providers {
+			if providerState != nil {
+				checks += providerState.Counters.Checks
+			}
 		}
-		return " · sort " + sort
+		if checks == 0 {
+			text = "check to measure"
+		}
+	case panelFavourites:
+		if len(m.favouriteList()) == 0 {
+			text = "set a favourite"
+		}
 	}
-	return ""
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	return action.Render(string(runes[0])) + title.Render(string(runes[1:]))
 }
 
 func (m model) healthCounts() (ok, account, down, unknown int) {
@@ -1565,12 +1623,37 @@ func buildTitleBorder(w int, styledTitle, color string, bs lipgloss.Border) stri
 		borderStyle.Render(strings.Repeat(bs.Top, fill)+bs.TopRight)
 }
 
+func buildBottomBorder(width int, styledHint, color string, border lipgloss.Border) string {
+	if width < 4 {
+		return ""
+	}
+	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	hint := " " + styledHint + " "
+	fill := width - 3 - ansi.StringWidth(hint)
+	if fill < 0 {
+		hint = ansi.Truncate(hint, width-3, "")
+		fill = 0
+	}
+	return borderStyle.Render(border.BottomLeft+strings.Repeat(border.Bottom, fill)) +
+		hint + borderStyle.Render(border.Bottom+border.BottomRight)
+}
+
 // truncate shortens s to w display cells without breaking ANSI sequences.
 func truncate(s string, w int) string {
 	if ansi.StringWidth(s) <= w {
 		return s
 	}
 	return ansi.Truncate(s, w, "")
+}
+func fitCells(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	s = ansi.Truncate(s, width, "")
+	if pad := width - ansi.StringWidth(s); pad > 0 {
+		s += strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 // paneContent dispatches to the pane renderer.

@@ -128,11 +128,13 @@ func TestHarness_EmptyConfigShowsNoProviders(t *testing.T) {
 	}
 }
 
-func TestHarness_NarrowRendersStack(t *testing.T) {
+func TestHarness_NarrowUsesProgressiveAdmission(t *testing.T) {
 	m := harnessModel(t)
-	m.width, m.height = 80, 40 // <100 forces stack
+	m.width, m.height = 80, 40
 	frame := ansi.Strip(m.render())
-	if !strings.Contains(frame, "[s]tatus") || !strings.Contains(frame, "s[t]ats") {
-		t.Error("stack render must include all panes")
+	for _, title := range []string{"status", "stats"} {
+		if !strings.Contains(frame, title) {
+			t.Fatalf("narrow progressive render missing %s", title)
+		}
 	}
 }

@@ -66,35 +66,33 @@ type Warning struct {
 }
 
 // Builtins.
-// sstop is the default btop-like terminal theme. It intentionally uses ANSI
-// palette slots, not arbitrary hex, so it inherits the user's terminal colors
-// exactly like btop. Structural chrome is cyan/blue/green/yellow by panel;
-// severity data uses green/yellow/red by value.
+// sstop is the default btop-like terminal theme. ANSI slots deliberately let
+// the terminal own the exact colors, matching btop's force-TTY behavior.
 var builtinSstop = Palette{
-	Bg:             "",   // terminal default
-	Fg:             "7",  // terminal foreground/white
-	Muted:          "8",  // dim gray
-	Title:          "15", // bright white body text
-	Accent:         "14", // cyan structural chrome
+	Bg:             "",
+	Fg:             "7",
+	Muted:          "7",
+	Title:          "15",
+	Accent:         "9",
 	BoxBorder:      "8",
-	BoxBorderFocus: "14",
-	OK:             "10", // green
-	Warn:           "11", // yellow
-	Err:            "9",  // red
+	BoxBorderFocus: "9",
+	OK:             "10",
+	Warn:           "11",
+	Err:            "9",
 	Unknown:        "8",
 	BarFill:        "10",
 	BarEmpty:       "8",
 	SparkLo:        "8",
 	SparkHi:        "10",
-	GradLo:         "14", // logo sweep: cyan
-	GradHi:         "12", // → blue; no pink/purple/magenta
-	SelectedBg:     "8",
+	GradLo:         "9",
+	GradHi:         "9",
+	SelectedBg:     "1",
 	SelectedFg:     "15",
-	KeyHint:        "8",
-	PaneStatus:     "14",
-	PaneUsage:      "12",
-	PaneFavourites: "6",
-	PaneStats:      "4",
+	KeyHint:        "7",
+	PaneStatus:     "2",
+	PaneUsage:      "3",
+	PaneFavourites: "5",
+	PaneStats:      "1",
 }
 
 // mocha is the former default — Catppuccin-mocha-inspired, softer.

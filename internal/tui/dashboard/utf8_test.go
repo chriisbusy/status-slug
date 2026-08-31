@@ -12,7 +12,7 @@ func TestUTF8NoCorruption(t *testing.T) {
 	m := newTestModel()
 	m.cfg.Providers[0].Name = "プロバイダー日本語"
 	for w := 1; w <= 65; w++ {
-		frame := m.renderPane(0, 0, w, 6, false)
+		frame := m.renderPane(panelStatus, w, 6)
 		if !utf8.ValidString(frame) {
 			t.Fatalf("width %d: invalid UTF-8 in pane render", w)
 		}
