@@ -597,6 +597,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.wiz.Init()
 		}
 		return m, nil
+	case "R":
+		return m, moshiStatusCmd()
 	case "r":
 		// Reconfigure the selected provider through the wizard popup.
 		if m.focused == panelStatus {
@@ -1556,7 +1558,7 @@ func (m model) paneBottomHint(panel panelID) string {
 		if len(m.cfg.Providers) == 0 {
 			return phrase("add provider or integration", 0)
 		}
-		return join(item("a", "add"), item("c", "check"), scroll, item("s", "menu"))
+		return join(item("a", "add"), item("c", "check"), item("R", "moshi refresh"), scroll, item("s", "menu"))
 	case panelUsage:
 		if len(m.cfg.Providers) == 0 {
 			return phrase("add provider or integration", 0)

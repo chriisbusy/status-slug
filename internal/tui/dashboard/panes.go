@@ -102,8 +102,7 @@ func (m model) renderStatusPane(w, h int, _ bool) string {
 	}
 	graph := m.statusGraph(history, selectedProvider, graphWidth, h)
 	right := make([]string, h)
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	right[0] = title.Render(fitCells("provider/model                 p95  age  gauge", rightWidth))
+	right[0] = m.statusHeaderLine(rightWidth)
 	moshiLines := m.moshiDashboardLines(rightWidth)
 	moshiLines = moshiLines[:min(len(moshiLines), max(0, h-2))]
 	visibleRows := max(0, h-1-len(moshiLines))
@@ -145,8 +144,7 @@ func (m model) renderEmptyStatus(width, height int) string {
 }
 
 func (m model) renderNarrowStatus(providers []*config.Provider, w, h int) string {
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	lines := []string{title.Render(fitCells("provider/model       p95  gauge", w))}
+	lines := []string{m.statusHeaderLine(w)}
 	moshiLines := m.moshiDashboardLines(w)
 	moshiLines = moshiLines[:min(len(moshiLines), max(0, h-2))]
 	visibleRows := max(0, h-1-len(moshiLines))
@@ -180,6 +178,19 @@ func groupedProviders(providers []*config.Provider) []*config.Provider {
 		}
 	}
 	return out
+}
+
+func (m model) statusHeaderLine(width int) string {
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	nameWidth, ageWidth := 18, 0
+	if width >= 46 {
+		ageWidth = 5
+	}
+	line := "  " + title.Render(statsCell("provider/model", nameWidth)) + title.Render(statsCell("p95", 6))
+	if ageWidth > 0 {
+		line += title.Render(statsCell("age", ageWidth))
+	}
+	return fitCells(line+title.Render("gauge"), width)
 }
 
 func (m model) statusGaugeLine(provider *config.Provider, width int, selected bool) string {
@@ -217,12 +228,12 @@ func (m model) statusGaugeLine(provider *config.Provider, width int, selected bo
 		nameColor = m.palette[theme.Title]
 	}
 	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor)).Bold(true)
-	line := mark + " " + nameStyle.Render(fitCells(provider.Name, nameWidth)) +
-		lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true).Render(fitCells(p95Text, 6))
+	line := mark + " " + nameStyle.Render(statsCell(provider.Name, nameWidth)) +
+		lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true).Render(statsCell(p95Text, 6))
 	if showAge {
-		line += lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(fitCells(age, ageWidth))
+		line += lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(statsCell(age, ageWidth))
 	}
-	line += " " + m.latencyGauge(max(latency, p95), gaugeWidth)
+	line += m.latencyGauge(max(latency, p95), gaugeWidth)
 	line = fitCells(line, width)
 	if selected && m.focused == panelStatus {
 		return lipgloss.NewStyle().
@@ -541,12 +552,12 @@ func (m model) renderFavouritesPane(w, h int, _ bool) string {
 		providerWidth = 0
 		modelWidth = max(8, contentWidth-nowWidth-p95Width-ageWidth-graphWidth)
 	}
-	header := title.Render(fitCells("model", modelWidth))
+	header := title.Render(statsCell("model", modelWidth))
 	if !compact {
-		header += title.Render(fitCells("provider", providerWidth))
+		header += title.Render(statsCell("provider", providerWidth))
 	}
-	header += title.Render(fitCells("now", nowWidth)) + title.Render(fitCells("p95", p95Width)) +
-		title.Render(fitCells("age", ageWidth)) + title.Render("graph")
+	header += title.Render(statsCell("now", nowWidth)) + title.Render(statsCell("p95", p95Width)) +
+		title.Render(statsCell("age", ageWidth)) + title.Render("graph")
 	lines := []string{fitCells(header, contentWidth)}
 	visibleRows := max(0, h-1)
 	offset := min(m.scroll[panelFavourites], max(0, len(favourites)-visibleRows))
@@ -590,13 +601,13 @@ func (m model) renderFavouritesPane(w, h int, _ bool) string {
 			rowColor = m.palette[theme.Title]
 		}
 		rowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(rowColor)).Bold(true)
-		line := rowStyle.Render(fitCells(name, modelWidth))
+		line := rowStyle.Render(statsCell(name, modelWidth))
 		if !compact {
-			line += title.Render(fitCells(favourite.provider.Name, providerWidth))
+			line += title.Render(statsCell(favourite.provider.Name, providerWidth))
 		}
-		line += m.latencyStyle(latency).Render(fitCells(nowText, nowWidth)) +
-			title.Render(fitCells(p95Text, p95Width)) +
-			muted.Render(fitCells(ageText, ageWidth)) +
+		line += m.latencyStyle(latency).Render(statsCell(nowText, nowWidth)) +
+			title.Render(statsCell(p95Text, p95Width)) +
+			muted.Render(statsCell(ageText, ageWidth)) +
 			m.latencyStyle(p95).Render(fitCells(graphLine, graphWidth))
 		line = fitCells(line, contentWidth)
 		if offset+rowIndex == m.sel[panelFavourites] && m.focused == panelFavourites {
@@ -850,7 +861,7 @@ func (m model) renderStatsPane(width, height int, _ bool) string {
 			}
 			label = ansi.Truncate(label, max(0, column.Width-1), "") + arrow
 		}
-		header += title.Render(fitCells(label, column.Width))
+		header += title.Render(statsCell(label, column.Width))
 	}
 	visible := max(0, height-2)
 	offset := min(m.scroll[panelStats], max(0, len(rows)-visible))
@@ -933,9 +944,16 @@ func (m model) renderStatsRow(row statsRow, slot int, columns []table.Column, ke
 	}
 	var line string
 	for index, column := range columns {
-		line += fitCells(styled[keys[index]], column.Width)
+		line += statsCell(styled[keys[index]], column.Width)
 	}
 	return fitCells(line, width)
+}
+
+func statsCell(value string, width int) string {
+	if width <= 1 {
+		return fitCells(value, width)
+	}
+	return fitCells(value, width-1) + " "
 }
 
 func (m model) statsScrollCell(total, offset, visible, row, height int) string {
