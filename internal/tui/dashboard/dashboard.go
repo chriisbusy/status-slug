@@ -606,19 +606,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.wiz.Init()
 		}
 		return m, nil
-	case "R":
+	case "r", "R":
 		return m, moshiStatusCmd()
-	case "r":
-		// Reconfigure the selected provider through the wizard popup.
-		if m.focused == panelStatus {
-			if p := m.selectedProvider(); p != nil {
-				m.openWizard(p.Name)
-				if m.wiz != nil {
-					return m, m.wiz.Init()
-				}
-			}
-		}
-		return m, nil
 	case "d":
 		if m.focused == panelStatus {
 			if p := m.selectedProvider(); p != nil {
@@ -1572,7 +1561,7 @@ func (m model) paneBottomHint(panel panelID) string {
 		if len(m.cfg.Providers) == 0 {
 			return phrase("add provider or integration", 0)
 		}
-		return join(item("a", "add"), item("c", "check"), item("R", "moshi refresh"), scroll, item("s", "menu"))
+		return join(phrase("add", 0), phrase("check", 0), phrase("refresh", 0), scroll)
 	case panelUsage:
 		if len(m.cfg.Providers) == 0 {
 			return phrase("add provider or integration", 0)
@@ -1584,12 +1573,12 @@ func (m model) paneBottomHint(panel panelID) string {
 		if meters == 0 {
 			return phrase("check to measure", 0)
 		}
-		return join(item("c", "refresh"), scroll, item("u", "menu"))
+		return join(phrase("refresh", 0), scroll)
 	case panelFavourites:
 		if len(m.favouriteList()) == 0 {
 			return phrase("set a favourite", 6)
 		}
-		return join(item("⏎", "check"), scroll, item("f", "menu"))
+		return join(item("⏎", "check"), scroll)
 	case panelStats:
 		checks := 0
 		for _, providerState := range m.st.Providers {
@@ -1600,7 +1589,7 @@ func (m model) paneBottomHint(panel panelID) string {
 		if checks == 0 {
 			return phrase("check to measure", 0)
 		}
-		return join(item("c", "check"), scroll, item("t", "menu"))
+		return join(phrase("check", 0), scroll)
 	}
 	return ""
 }

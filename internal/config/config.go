@@ -34,8 +34,7 @@ type Settings struct {
 	AlertBell     bool   `toml:"alert_bell"`
 	BorderStyle   string `toml:"border_style"`
 	GraphStyle    string `toml:"graph_style"`
-	// ThemeBackground paints the theme's bg color over the whole terminal
-	// when true; false (default) lets the terminal's own background through.
+	// ThemeBackground paints the theme's bg color over the whole terminal.
 	ThemeBackground bool   `toml:"theme_background"`
 	ServeListen     string `toml:"serve_listen,omitempty"` // saved by serve --listen
 }
@@ -88,14 +87,15 @@ func Default() Config {
 	return Config{
 		Version: 1,
 		Settings: Settings{
-			Theme:         "sstop",
-			ProbeTimeout:  10,
-			AutoRefresh:   60,
-			ProbeMode:     "models",
-			HistoryLength: 60,
-			KeysSource:    "auto",
-			BorderStyle:   "rounded",
-			GraphStyle:    "tty",
+			Theme:           "sstop",
+			ProbeTimeout:    10,
+			AutoRefresh:     60,
+			ProbeMode:       "models",
+			HistoryLength:   60,
+			KeysSource:      "auto",
+			BorderStyle:     "rounded",
+			GraphStyle:      "tty",
+			ThemeBackground: true,
 		},
 	}
 }

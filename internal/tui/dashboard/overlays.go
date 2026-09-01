@@ -1489,7 +1489,7 @@ const helpMarkdown = `# sslug keys
 | g | integrations |
 | o | settings |
 | a | add provider |
-| r | edit provider (wizard popup) |
+| r | refresh Moshi status |
 | d | remove selected provider |
 | z | zoom pane |
 | ? | this help |

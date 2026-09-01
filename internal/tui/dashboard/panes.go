@@ -33,13 +33,6 @@ func (m model) glyphs() glyphSet {
 	return unicodeGlyphs
 }
 
-// emptyHint renders an actionable empty-state line with one action-colored key.
-func (m model) emptyHint(lead, key, rest string) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(lead+" ") +
-		lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true).Render(key) +
-		lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted])).Render(rest)
-}
-
 // latencyStyle colors a latency reading by threshold: fast green, mid muted,
 // slow amber — btop's data-by-value discipline.
 func (m model) latencyStyle(ms float64) lipgloss.Style {
@@ -419,7 +412,7 @@ func (m model) usageEntries() []usageEntry {
 
 func (m model) renderUsagePane(w, h int, _ bool) string {
 	if len(m.cfg.Providers) == 0 {
-		return m.emptyHint("no providers —", "a", "dd your first one")
+		return ""
 	}
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
@@ -433,9 +426,6 @@ func (m model) renderUsagePane(w, h int, _ bool) string {
 			status = providerState.LastCheck.Status
 		}
 		header := m.glyphFor(status) + " " + title.Render(providerConfig.Name)
-		if len(providerConfig.Meters) == 0 {
-			header += muted.Render("  no meters")
-		}
 		header = fitCells(header, contentWidth)
 		if entryIndex == m.sel[panelUsage] && m.focused == panelUsage {
 			header = lipgloss.NewStyle().
@@ -446,18 +436,35 @@ func (m model) renderUsagePane(w, h int, _ bool) string {
 		}
 		lines = append(lines, header)
 		entryIndex++
-		if providerConfig.Note != "" {
+		if providerConfig.Note != "" &&
+			!strings.HasPrefix(providerConfig.Note, "configured from OMP") &&
+			!strings.HasPrefix(providerConfig.Note, "OMP-managed") {
 			lines = append(lines, muted.Render(fitCells(providerConfig.Note, contentWidth)))
 		}
-		for _, meter := range providerConfig.Meters {
-			lines = append(lines, m.meterLines(providerConfig.Name, meter, contentWidth, entryIndex == m.sel[panelUsage])...)
-			entryIndex++
-		}
-		if providerState != nil && providerState.Counters.Checks > 0 {
-			counter := providerState.Counters
-			lines = append(lines, muted.Render(fitCells(
-				fmt.Sprintf("probes %d ok · %d account · %d down", counter.OK, counter.Account, counter.Down),
-				contentWidth)))
+		if len(providerConfig.Meters) == 0 {
+			if providerState != nil && providerState.Counters.Checks > 0 {
+				counter := providerState.Counters
+				success := float64(counter.OK) / float64(counter.Checks)
+				value := title.Render(fmt.Sprintf("probe success  %3.0f%%", success*100))
+				lines = append(lines,
+					fitCells(value, contentWidth),
+					m.meterCells(success, max(6, contentWidth-5))+" "+title.Render(fmt.Sprintf("%3.0f%%", success*100)),
+					muted.Render(fitCells(fmt.Sprintf("checks %d · account %d · down %d", counter.Checks, counter.Account, counter.Down), contentWidth)),
+				)
+			} else {
+				lines = append(lines, muted.Render(fitCells("not measured", contentWidth)))
+			}
+		} else {
+			for _, meter := range providerConfig.Meters {
+				lines = append(lines, m.meterLines(providerConfig.Name, meter, contentWidth, entryIndex == m.sel[panelUsage])...)
+				entryIndex++
+			}
+			if providerState != nil && providerState.Counters.Checks > 0 {
+				counter := providerState.Counters
+				lines = append(lines, muted.Render(fitCells(
+					fmt.Sprintf("checks %d · ok %d · account %d · down %d", counter.Checks, counter.OK, counter.Account, counter.Down),
+					contentWidth)))
+			}
 		}
 	}
 	return renderViewport(lines, m.scroll[panelUsage], h, w, m.palette, theme.PaneUsage)
@@ -1059,8 +1066,18 @@ func (m model) usageLineCount() int {
 	total := 0
 	for _, providerConfig := range m.cfg.Providers {
 		total++
-		if providerConfig.Note != "" {
+		if providerConfig.Note != "" &&
+			!strings.HasPrefix(providerConfig.Note, "configured from OMP") &&
+			!strings.HasPrefix(providerConfig.Note, "OMP-managed") {
 			total++
+		}
+		if len(providerConfig.Meters) == 0 {
+			if providerState := m.st.Providers[providerConfig.Name]; providerState != nil && providerState.Counters.Checks > 0 {
+				total += 3
+			} else {
+				total++
+			}
+			continue
 		}
 		for _, meter := range providerConfig.Meters {
 			total += 2

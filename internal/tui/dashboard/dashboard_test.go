@@ -935,7 +935,7 @@ func TestUsageRetainsProviderNoteAndProbeCounters(t *testing.T) {
 	providerState := m.st.Provider("Neuralwatt")
 	providerState.Counters = state.Counters{Checks: 6, OK: 4, Account: 1, Down: 1}
 	got := ansi.Strip(m.renderUsagePane(80, 30, false))
-	for _, want := range []string{"home lab allocation", "probes 4 ok · 1 account · 1 down"} {
+	for _, want := range []string{"home lab allocation", "probe success", "checks 6", "account 1", "down 1"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("usage pane missing %q:\n%s", want, got)
 		}
@@ -1163,5 +1163,23 @@ func TestStatsDetailPreservesCompleteAge(t *testing.T) {
 func TestHelpDocumentsReverseViewCycle(t *testing.T) {
 	if !strings.Contains(helpMarkdown, "p / shift+p") || !strings.Contains(helpMarkdown, "next / previous") {
 		t.Fatalf("help omits reverse view control")
+	}
+}
+
+func TestUsageWithoutMetersShowsRealProbeGaugeNotImportNote(t *testing.T) {
+	m := newTestModel()
+	providerConfig := m.cfg.Find("OKProv")
+	providerConfig.Meters = nil
+	providerConfig.Note = "configured from OMP models.yml"
+	providerState := m.st.Provider("OKProv")
+	providerState.Counters = state.Counters{Checks: 4, OK: 3, Account: 1}
+	got := ansi.Strip(m.renderUsagePane(60, 30, false))
+	for _, want := range []string{"probe success", "75%", "checks 4", "account 1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("usage missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "configured from OMP") {
+		t.Fatalf("machine provenance leaked into usage:\n%s", got)
 	}
 }

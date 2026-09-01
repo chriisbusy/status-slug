@@ -117,14 +117,15 @@ func TestHarness_HelpOverlay(t *testing.T) {
 	}
 }
 
-func TestHarness_EmptyConfigShowsNoProviders(t *testing.T) {
+func TestHarness_EmptyConfigShowsPanelBorderActions(t *testing.T) {
 	cfg := config.Default()
 	cfg.Settings.AutoRefresh = 0
 	m := New(cfg, state.New())
+	m.wiz = nil
 	m.width, m.height = 120, 40
-	frame := m.render()
-	if !strings.Contains(frame, "no providers") {
-		t.Error("empty config should render the no-providers hint")
+	frame := ansi.Strip(m.render())
+	if !strings.Contains(frame, "add provider or integration") {
+		t.Error("empty config should render add action in status border")
 	}
 }
 
