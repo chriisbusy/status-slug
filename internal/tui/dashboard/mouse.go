@@ -4,8 +4,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/chriisbusy/status-slug/internal/config"
 )
 
 // handleClick processes a mouse click: focus pane, select row, or activate
@@ -14,6 +12,13 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	x, y := mouse.X, mouse.Y
 	if m.footer != "" {
 		m.footer = ""
+	}
+	if m.ov.kind == overlayMenu {
+		return m.menuClick(x, y)
+	}
+	if m.ov.kind == overlayConfirm {
+		m.ov = overlayState{}
+		return m, nil
 	}
 
 	// Header buttons. Geometry is recomputed from the same layout helper that
@@ -39,27 +44,11 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			m.ov = m.newHelpOverlay()
 			return m, nil
 		case "menu":
-			m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
-				{"add provider", "main.add"},
-				{"settings", "main.settings"},
-				{"cycle theme", "main.theme"},
-				{"cycle view", "main.view"},
-				{"Moshi / integrations", "main.integrations"},
-				{"help", "main.help"},
-				{"quit", "main.quit"},
-			}}
+			m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
 			return m, nil
 		}
 	}
 
-	// Overlay: clicks inside menus select/activate; elsewhere dismiss.
-	if m.ov.kind == overlayMenu {
-		return m.menuClick(x, y)
-	}
-	if m.ov.kind == overlayConfirm {
-		m.ov = overlayState{}
-		return m, nil
-	}
 	if mouse.Button == tea.MouseLeft {
 		if split, ok := m.splitAt(x, y); ok {
 			m.dragSplit = split
@@ -126,7 +115,7 @@ func (m model) handleMouseRelease(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	}
 	m.applySplitDrag(m.dragSplit, mouse.X, mouse.Y)
 	m.dragSplit = ""
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.saveDashboardConfig(); err != nil {
 		m.footer = "save pane splits: " + err.Error()
 		return m, nil
 	}
@@ -142,6 +131,23 @@ func (m model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	if m.footer != "" {
 		m.footer = ""
 	}
+	if m.ov.kind == overlayMenu {
+		direction := 1
+		if mouse.Button == tea.MouseWheelUp {
+			direction = -1
+		}
+		if m.ov.menuSel < len(m.ov.menuItems) {
+			action := m.ov.menuItems[m.ov.menuSel].action
+			if strings.HasPrefix(action, "inline:") {
+				return m.cycleMenuValue(action, direction), nil
+			}
+			if action == "main.theme" || action == "main.view" {
+				return m.cycleMainValue(action, direction), nil
+			}
+		}
+		m.ov.menuSel = max(0, min(len(m.ov.menuItems)-1, m.ov.menuSel+direction))
+		return m, nil
+	}
 	if m.ov.kind == overlayViewport {
 		var cmd tea.Cmd
 		m.ov.vp, cmd = m.ov.vp.Update(tea.MouseWheelMsg(mouse))
@@ -153,12 +159,12 @@ func (m model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	}
 	switch mouse.Button {
 	case tea.MouseWheelUp:
-		m.scroll[p]--
+		m.scroll[p] -= 3
 		if m.scroll[p] < 0 {
 			m.scroll[p] = 0
 		}
 	case tea.MouseWheelDown:
-		m.scroll[p]++
+		m.scroll[p] += 3
 		maxScroll := m.maxScroll(p)
 		if m.scroll[p] > maxScroll {
 			m.scroll[p] = maxScroll
@@ -184,24 +190,37 @@ func (m model) maxScroll(panel panelID) int {
 	return max(0, total-m.selectableViewportHeight(panel))
 }
 
-// menuClick maps a click to a menu row when the menu overlay is open.
+// menuClick maps the btop-style two-row option geometry to one menu item.
 func (m model) menuClick(x, y int) (tea.Model, tea.Cmd) {
-	items := len(m.ov.menuItems)
-	overlayHeight := items + 4
-	overlayWidth := 0
-	for _, item := range m.ov.menuItems {
-		overlayWidth = max(overlayWidth, len(item.label)+4)
+	start, end := m.menuWindow()
+	leftWidth, rightWidth := m.menuWidths()
+	contentWidth := leftWidth + rightWidth + 1
+	contentHeight := 2 + (end-start)*2 + 1
+	boxWidth, boxHeight := contentWidth+4, contentHeight+2
+	startX, startY := (m.width-boxWidth)/2, (m.height-boxHeight)/2
+	itemY := y - (startY + 3)
+	if x < startX || x >= startX+boxWidth || itemY < 0 || itemY >= (end-start)*2 {
+		m.ov = overlayState{}
+		return m, nil
 	}
-	overlayWidth = max(24, overlayWidth)
-	startX := (m.width - overlayWidth) / 2
-	startY := (m.height - overlayHeight) / 2
-	row := y - startY - 1
-	if row >= 0 && row < items && x >= startX && x < startX+overlayWidth {
-		m.ov.menuSel = row
-		return m.runMenuAction(m.ov.menuItems[row].action)
+	row := start + itemY/2
+	m.ov.menuSel = row
+	action := m.ov.menuItems[row].action
+	if strings.HasPrefix(action, "inline:") {
+		direction := 1
+		if x < startX+2+leftWidth/2 {
+			direction = -1
+		}
+		return m.cycleMenuValue(action, direction), nil
 	}
-	m.ov = overlayState{}
-	return m, nil
+	if action == "main.theme" || action == "main.view" {
+		direction := 1
+		if x < startX+2+leftWidth/2 {
+			direction = -1
+		}
+		return m.cycleMainValue(action, direction), nil
+	}
+	return m.runMenuAction(action)
 }
 
 // panelAt maps screen coordinates through the same geometry used by render.

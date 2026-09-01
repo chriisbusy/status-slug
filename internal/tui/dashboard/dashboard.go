@@ -174,22 +174,24 @@ func Run() error {
 	return RunWith(cfg, st)
 }
 
-// RunWith starts the dashboard with the given config and state.
-// With no providers configured, the setup wizard opens as a popup.
 func RunWith(cfg config.Config, st *state.File) error {
+	defer resetBasicMouse()
 	p := tea.NewProgram(New(cfg, st))
 	_, err := p.Run()
 	return err
 }
 
-// RunWizard starts the dashboard with the setup wizard popup already open
-// (used by `sslug setup`).
 func RunWizard(cfg config.Config, st *state.File, reconfigure string) error {
+	defer resetBasicMouse()
 	m := New(cfg, st)
 	m.openWizard(reconfigure)
 	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err
+}
+
+func resetBasicMouse() {
+	_, _ = fmt.Fprint(os.Stdout, ansi.ResetModeMouseNormal+ansi.ResetModeMouseExtSgr)
 }
 
 // openWizard mounts the setup wizard as a modal popup.
@@ -311,6 +313,21 @@ func loadPrefs(st *state.File) panelPrefs {
 		p.statsSortDir = 2
 	}
 	return p
+}
+
+// saveDashboardConfig merges dashboard-owned settings into the latest file so
+// a long-running UI cannot overwrite externally updated providers or meters.
+func (m *model) saveDashboardConfig() error {
+	latest, err := config.Load()
+	if err != nil {
+		return err
+	}
+	latest.Settings, latest.Views = m.cfg.Settings, m.cfg.Views
+	if err := config.Save(latest); err != nil {
+		return err
+	}
+	m.cfg = latest
+	return nil
 }
 
 // savePrefs persists panel prefs to state.
@@ -554,15 +571,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = m.newIntegrationsOverlay()
 		return m, moshiStatusCmd()
 	case "m":
-		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
-			{"add provider", "main.add"},
-			{"settings", "main.settings"},
-			{"cycle theme", "main.theme"},
-			{"cycle view", "main.view"},
-			{"Moshi / integrations", "main.integrations"},
-			{"help", "main.help"},
-			{"quit", "main.quit"},
-		}}
+		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
 		return m, nil
 	case "s":
 		m.ov = m.newMenuOverlay(panelStatus)
@@ -966,7 +975,7 @@ func (m model) cycleTheme() model {
 		}
 	}
 	m.cfg.Settings.Theme = next
-	if err := config.Save(m.cfg); err != nil {
+	if err := m.saveDashboardConfig(); err != nil {
 		m.footer = "save config: " + err.Error()
 		m.footerSeq++
 		return m
@@ -1130,12 +1139,12 @@ func (m model) sortedProviders() []*config.Provider {
 // View implements tea.Model.
 func (m model) View() tea.View {
 	if m.width == 0 {
-		return tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+		return tea.View{Content: ansi.SetModeMouseNormal + ansi.SetModeMouseExtSgr, AltScreen: true, MouseMode: tea.MouseModeNone}
 	}
-	content := m.render()
+	content := ansi.SetModeMouseNormal + ansi.SetModeMouseExtSgr + m.render()
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeNone
 	return v
 }
 
@@ -1417,18 +1426,13 @@ func (m model) renderFooter() string {
 	item := func(key, desc string) string {
 		return accent.Render(key) + muted.Render(desc)
 	}
-	var primary []string
-	switch m.focused {
-	case panelStatus:
-		primary = []string{item("⏎", " probe"), item("c", " all"), item("i", " inspect"), item("s", " actions"), item("r", " edit"), item("d", " off/remove")}
-	case panelUsage:
-		primary = []string{item("u", " actions"), item("j/k", " rows"), item("↑/↓", " scroll"), item("⏎", " set via menu")}
-	case panelFavourites:
-		primary = []string{item("⏎", " probe"), item("f", " actions"), item("j/k", " rows"), item("a", " provider")}
-	case panelStats:
-		primary = []string{item("t", " actions"), item("click", " sort"), item("j/k", " rows"), item("z", " zoom")}
+	primary := []string{
+		item("tab", " focus"),
+		item("m", " menu"),
+		item("p", " views"),
+		item("?", " help"),
+		item("q", " quit"),
 	}
-	primary = append(primary, item("tab", " focus"), item("m", " menu"), item("p", " preset"), item("?", " help"), item("q", " quit"))
 	return " " + fitActionLine(primary, m.width-1, muted.Render(" · "))
 }
 
@@ -1530,19 +1534,46 @@ func (m model) renderPane(p panelID, w, h int) string {
 	if len(lines) > 0 {
 		lines[0] = buildTitleBorder(w, title, borderColor, bs)
 		if hint := m.paneBottomHint(p); hint != "" && len(lines) > 1 {
-			lines[len(lines)-1] = buildBottomBorder(w, hint, borderColor, bs)
+			lines[min(len(lines)-1, h-1)] = buildBottomBorder(w, hint, borderColor, bs)
 		}
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (m model) paneBottomHint(panel panelID) string {
-	var text string
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	item := func(key, text string) string { return action.Render(key) + title.Render(" "+text) }
+	scroll := action.Render("↑") + title.Render(" scroll ") + action.Render("↓")
+	join := func(items ...string) string { return strings.Join(items, muted.Render(" · ")) }
+	phrase := func(text string, keyIndex int) string {
+		runes := []rune(text)
+		return title.Render(string(runes[:keyIndex])) + action.Render(string(runes[keyIndex])) + title.Render(string(runes[keyIndex+1:]))
+	}
 	switch panel {
 	case panelStatus:
 		if len(m.cfg.Providers) == 0 {
-			text = "add provider or integration"
+			return phrase("add provider or integration", 0)
 		}
+		return join(item("a", "add"), item("c", "check"), scroll, item("s", "menu"))
+	case panelUsage:
+		if len(m.cfg.Providers) == 0 {
+			return phrase("add provider or integration", 0)
+		}
+		meters := 0
+		for _, providerConfig := range m.cfg.Providers {
+			meters += len(providerConfig.Meters)
+		}
+		if meters == 0 {
+			return phrase("check to measure", 0)
+		}
+		return join(item("c", "refresh"), scroll, item("u", "menu"))
+	case panelFavourites:
+		if len(m.favouriteList()) == 0 {
+			return phrase("set a favourite", 6)
+		}
+		return join(item("⏎", "check"), scroll, item("f", "menu"))
 	case panelStats:
 		checks := 0
 		for _, providerState := range m.st.Providers {
@@ -1551,20 +1582,11 @@ func (m model) paneBottomHint(panel panelID) string {
 			}
 		}
 		if checks == 0 {
-			text = "check to measure"
+			return phrase("check to measure", 0)
 		}
-	case panelFavourites:
-		if len(m.favouriteList()) == 0 {
-			text = "set a favourite"
-		}
+		return join(item("c", "check"), scroll, item("t", "menu"))
 	}
-	if text == "" {
-		return ""
-	}
-	runes := []rune(text)
-	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	return action.Render(string(runes[0])) + title.Render(string(runes[1:]))
+	return ""
 }
 
 func (m model) healthCounts() (ok, account, down, unknown int) {

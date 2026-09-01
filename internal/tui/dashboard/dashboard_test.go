@@ -446,12 +446,12 @@ func TestHeaderKeepsExactSSLUGWordmark(t *testing.T) {
 	}
 }
 
-func TestFooterUsesCompactWholeActions(t *testing.T) {
+func TestFooterUsesGlobalActionsOnly(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderFooter())
-	for _, want := range []string{"⏎ probe", "c all", "s actions", "p preset"} {
+	for _, want := range []string{"tab focus", "m menu", "p views", "? help", "q quit"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("footer missing compact action %q: %q", want, got)
+			t.Fatalf("footer missing global action %q: %q", want, got)
 		}
 	}
 	if ansi.StringWidth(m.renderFooter()) > m.width {
@@ -956,7 +956,7 @@ func TestStatusGroupingChangesProviderOrder(t *testing.T) {
 	}
 }
 
-func TestOverflowScrollbarsExposeArrowsAndThumb(t *testing.T) {
+func TestOverflowScrollbarsUseTrackAndThumbWithoutArrows(t *testing.T) {
 	m := newTestModel()
 	for index := range 12 {
 		m.cfg.Providers = append(m.cfg.Providers, config.Provider{
@@ -965,14 +965,11 @@ func TestOverflowScrollbarsExposeArrowsAndThumb(t *testing.T) {
 		})
 	}
 	for name, output := range map[string]string{
-		"status":     ansi.Strip(m.renderStatusPane(60, 8, false)),
-		"usage":      ansi.Strip(m.renderUsagePane(60, 8, false)),
+		"status": ansi.Strip(m.renderStatusPane(60, 8, false)), "usage": ansi.Strip(m.renderUsagePane(60, 8, false)),
 		"favourites": ansi.Strip(m.renderFavouritesPane(60, 8, false)),
 	} {
-		for _, glyph := range []string{"▲", "█", "▼"} {
-			if !strings.Contains(output, glyph) {
-				t.Fatalf("%s overflow missing scrollbar %s:\n%s", name, glyph, output)
-			}
+		if !strings.Contains(output, "█") || strings.ContainsAny(output, "▲▼") {
+			t.Fatalf("%s scrollbar contract failed:\n%s", name, output)
 		}
 	}
 }
@@ -1009,21 +1006,70 @@ func TestEmptyActionsRenderInPanelBottomBorders(t *testing.T) {
 	}
 }
 
-func TestThemeNoticeExpiresAndMenuCycleStaysOpen(t *testing.T) {
+func TestThemeCarouselPreviewsWithoutClosingOrFooter(t *testing.T) {
 	m := newTestModel()
-	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: []menuItem{
-		{"cycle theme", "main.theme"},
-	}}
-	next, cmd := m.menuKey("enter")
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems(), menuSel: 1}
+	before := m.cfg.Settings.Theme
+	next, cmd := m.menuKey("right")
 	got := next.(model)
 	if got.ov.kind != overlayMenu {
 		t.Fatal("theme cycle closed menu")
 	}
-	if got.footer == "" || cmd == nil {
-		t.Fatalf("theme cycle did not schedule transient notice: footer=%q", got.footer)
+	if got.cfg.Settings.Theme == before {
+		t.Fatal("theme did not preview")
 	}
-	cleared, _ := got.Update(cmd())
-	if cleared.(model).footer != "" {
-		t.Fatalf("theme notice persisted: %q", cleared.(model).footer)
+	if got.footer != "" || cmd != nil {
+		t.Fatalf("live preview should not emit footer/command: footer=%q cmd=%v", got.footer, cmd != nil)
+	}
+}
+
+func TestBtopMenuFitsNarrowSupportedTerminal(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 60, 18
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
+	frame := m.renderOverlay(strings.Repeat(" ", m.width))
+	for row, line := range strings.Split(frame, "\n") {
+		if ansi.StringWidth(line) > m.width {
+			t.Fatalf("menu row %d width=%d exceeds %d", row, ansi.StringWidth(line), m.width)
+		}
+	}
+}
+
+func TestBtopMenuMouseMapsTwoRowItem(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 100, 37
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
+	start, end := m.menuWindow()
+	left, right := m.menuWidths()
+	boxWidth := left + right + 1 + 4
+	boxHeight := 2 + (end-start)*2 + 1 + 2
+	startX, startY := (m.width-boxWidth)/2, (m.height-boxHeight)/2
+	next, _ := m.menuClick(startX+3, startY+3+2)
+	if next.(model).ov.menuSel != start+1 {
+		t.Fatalf("two-row click selected %d, want %d", next.(model).ov.menuSel, start+1)
+	}
+}
+
+func TestDashboardSavePreservesExternallyUpdatedProviders(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	disk := config.Default()
+	disk.Providers = []config.Provider{{Name: "actual", Kind: "openai-compatible", BaseURL: "https://example.invalid", Enabled: true}}
+	if err := config.Save(disk); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel()
+	m.cfg.Settings.Theme = "nord"
+	if err := m.saveDashboardConfig(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Providers) != 1 || got.Providers[0].Name != "actual" {
+		t.Fatalf("dashboard save overwrote external providers: %+v", got.Providers)
+	}
+	if got.Settings.Theme != "nord" {
+		t.Fatalf("dashboard setting was not merged: %q", got.Settings.Theme)
 	}
 }

@@ -21,15 +21,14 @@ func TestBuiltinDistinct(t *testing.T) {
 	}
 }
 
-func TestSstopPaneChromeDoesNotBorrowSeverityRoles(t *testing.T) {
+func TestSstopPaneChromeUsesDistinctBtopRoles(t *testing.T) {
 	p, _ := theme.Load("sstop", "")
-	severity := map[string]bool{
-		p[theme.OK]: true, p[theme.Warn]: true, p[theme.Err]: true,
-	}
+	seen := map[string]bool{}
 	for _, role := range []theme.Role{theme.PaneStatus, theme.PaneUsage, theme.PaneFavourites, theme.PaneStats} {
-		if severity[p[role]] {
-			t.Errorf("%s borrows severity color %q", role, p[role])
+		if seen[p[role]] {
+			t.Errorf("duplicate pane chrome %s=%q", role, p[role])
 		}
+		seen[p[role]] = true
 	}
 }
 

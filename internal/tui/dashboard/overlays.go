@@ -270,16 +270,29 @@ func (m model) runConfirm(action string) (tea.Model, tea.Cmd) {
 
 // --- menus ---
 
+func (m model) mainMenuItems() []menuItem {
+	return []menuItem{
+		{"view  ‹ " + m.activeViewDef().Name + " ›", "main.view"},
+		{"theme  ‹ " + m.cfg.Settings.Theme + " ›", "main.theme"},
+		{"status panel", "main.panel:status"},
+		{"usage panel", "main.panel:usage"},
+		{"favourites panel", "main.panel:favourites"},
+		{"stats panel", "main.panel:stats"},
+		{"add provider or integration", "main.add"},
+		{"integrations", "main.integrations"},
+		{"settings", "main.settings"},
+		{"help", "main.help"},
+		{"quit", "main.quit"},
+	}
+}
+
 func (m model) newMenuOverlay(p panelID) overlayState {
 	ov := overlayState{kind: overlayMenu, title: panelNames[p] + " menu"}
 	switch p {
 	case panelStatus:
 		ov.menuItems = []menuItem{
-			{"sort: name", "status.sort:name"},
-			{"sort: status", "status.sort:status"},
-			{"sort: latency", "status.sort:latency"},
-			{"sort: last checked", "status.sort:checked"},
-			{fmt.Sprintf("group by label: %s", onOff(m.prefs.statusGroup)), "status.group"},
+			{"sort  ‹ " + m.prefs.statusSort + " ›", "inline:status-sort"},
+			{"group by label  ‹ " + onOff(m.prefs.statusGroup) + " ›", "inline:status-group"},
 			{"check selected", "status.check"},
 			{"edit selected provider", "status.edit"},
 			{fmt.Sprintf("%s selected provider", enableDisableLabel(m.selectedProvider())), "status.toggle-enabled"},
@@ -287,27 +300,29 @@ func (m model) newMenuOverlay(p panelID) overlayState {
 		}
 	case panelUsage:
 		ov.menuItems = []menuItem{
+			{"refresh meters", "usage.refresh"},
 			{"set meter value", "usage.set"},
-			{"refresh auto meters", "usage.refresh"},
 			{"add meter", "usage.add"},
 			{"edit meter", "usage.edit"},
 			{"remove meter", "usage.remove"},
 		}
 	case panelFavourites:
 		ov.menuItems = []menuItem{
-			{"add favourite (from known models)", "fav.add-known"},
-			{"add favourite (custom id)", "fav.add-custom"},
-			{"toggle probe mode (chat/models) on selected", "fav.toggle-probe"},
-			{"remove selected favourite", "fav.remove"},
+			{"sort  ‹ " + m.prefs.favSort + " ›", "inline:fav-sort"},
+			{"add from known models", "fav.add-known"},
+			{"add custom model", "fav.add-custom"},
+			{"toggle selected probe mode", "fav.toggle-probe"},
 			{"re-probe selected", "fav.reprobe"},
-			{"sort: name", "fav.sort:name"},
-			{"sort: latency", "fav.sort:latency"},
-			{"sort: status", "fav.sort:status"},
+			{"remove selected favourite", "fav.remove"},
 		}
 	case panelStats:
+		sortValue := m.prefs.statsSort
+		if sortValue == "" {
+			sortValue = "natural"
+		}
 		ov.menuItems = []menuItem{
-			{"sort by column", "stats.sort"},
-			{fmt.Sprintf("favourite rows: %s", onOff(m.prefs.statsShowFavs)), "stats.favs"},
+			{"sort  ‹ " + sortValue + " ›", "inline:stats-sort"},
+			{"favourite rows  ‹ " + onOff(m.prefs.statsShowFavs) + " ›", "inline:stats-favs"},
 			{"reset counters", "stats.reset"},
 		}
 	}
@@ -319,6 +334,47 @@ func onOff(b bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+func (m model) cycleMenuValue(action string, direction int) model {
+	selected := m.ov.menuSel
+	cycle := func(values []string, current string) string {
+		index := 0
+		for i, value := range values {
+			if value == current {
+				index = i
+				break
+			}
+		}
+		return values[(index+direction+len(values))%len(values)]
+	}
+	switch action {
+	case "inline:status-sort":
+		m.prefs.statusSort = cycle([]string{"name", "status", "latency", "checked"}, m.prefs.statusSort)
+		m.ov = m.newMenuOverlay(panelStatus)
+	case "inline:status-group":
+		m.prefs.statusGroup = !m.prefs.statusGroup
+		m.ov = m.newMenuOverlay(panelStatus)
+	case "inline:fav-sort":
+		m.prefs.favSort = cycle([]string{"name", "latency", "status"}, m.prefs.favSort)
+		m.ov = m.newMenuOverlay(panelFavourites)
+	case "inline:stats-sort":
+		current := m.prefs.statsSort
+		if current == "" {
+			current = "natural"
+		}
+		next := cycle([]string{"natural", "name", "provider", "kind", "status", "latency", "p95", "age"}, current)
+		if next == "natural" {
+			next = ""
+		}
+		m.prefs.statsSort = next
+		m.ov = m.newMenuOverlay(panelStats)
+	case "inline:stats-favs":
+		m.prefs.statsShowFavs = !m.prefs.statsShowFavs
+		m.ov = m.newMenuOverlay(panelStats)
+	}
+	m.ov.menuSel = min(selected, max(0, len(m.ov.menuItems)-1))
+	return m
 }
 
 // optionalFloat validates a huh input that may be blank or a float.
@@ -333,9 +389,42 @@ func optionalFloat(s string) error {
 	return nil
 }
 
+func (m model) cycleMainValue(action string, direction int) model {
+	selected := m.ov.menuSel
+	cycle := func(values []string, current string) string {
+		index := 0
+		for i, value := range values {
+			if value == current {
+				index = i
+				break
+			}
+		}
+		return values[(index+direction+len(values))%len(values)]
+	}
+	switch action {
+	case "main.theme":
+		names := theme.BuiltinNames()
+		if entries, err := os.ReadDir(config.ThemesDir()); err == nil {
+			for _, entry := range entries {
+				if strings.HasSuffix(entry.Name(), ".theme") {
+					names = append(names, strings.TrimSuffix(entry.Name(), ".theme"))
+				}
+			}
+		}
+		m.cfg.Settings.Theme = cycle(names, m.cfg.Settings.Theme)
+		m.palette, m.themeWarns = theme.LoadFromSettings(m.cfg.Settings)
+	case "main.view":
+		m.st.UI.View = cycle(m.viewCycleOrder(), m.activeViewDef().Name)
+	}
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems(), menuSel: selected}
+	return m
+}
+
 func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "q":
+		_ = m.saveDashboardConfig()
+		m.savePrefs()
 		m.ov = overlayState{}
 		return m, nil
 	case "j", "down":
@@ -348,12 +437,36 @@ func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 			m.ov.menuSel--
 		}
 		return m, nil
+	case "left", "h", "right", "l":
+		if m.ov.menuSel < len(m.ov.menuItems) {
+			action := m.ov.menuItems[m.ov.menuSel].action
+			if strings.HasPrefix(action, "inline:") {
+				direction := 1
+				if key == "left" || key == "h" {
+					direction = -1
+				}
+				return m.cycleMenuValue(action, direction), nil
+			}
+			if action == "main.theme" || action == "main.view" {
+				direction := 1
+				if key == "left" || key == "h" {
+					direction = -1
+				}
+				return m.cycleMainValue(action, direction), nil
+			}
+		}
 	case "enter":
 		if m.ov.menuSel >= len(m.ov.menuItems) {
 			m.ov = overlayState{}
 			return m, nil
 		}
 		action := m.ov.menuItems[m.ov.menuSel].action
+		if strings.HasPrefix(action, "inline:") {
+			return m.cycleMenuValue(action, 1), nil
+		}
+		if action == "main.theme" || action == "main.view" {
+			return m.cycleMainValue(action, 1), nil
+		}
 		return m.runMenuAction(action)
 	}
 	return m, nil
@@ -362,6 +475,8 @@ func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 // runMenuAction executes a menu action id.
 func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 	previousMenu := m.ov
+	_ = m.saveDashboardConfig()
+	m.savePrefs()
 	m.ov = overlayState{}
 	switch {
 	case strings.HasPrefix(action, "main."):
@@ -376,6 +491,14 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 			if m.ov.kind == overlayForm {
 				return m, dashBlinkTick()
 			}
+		case "panel:status":
+			m.ov = m.newMenuOverlay(panelStatus)
+		case "panel:usage":
+			m.ov = m.newMenuOverlay(panelUsage)
+		case "panel:favourites":
+			m.ov = m.newMenuOverlay(panelFavourites)
+		case "panel:stats":
+			m.ov = m.newMenuOverlay(panelStats)
 		case "theme":
 			next := m.cycleTheme()
 			next.ov = previousMenu
@@ -965,7 +1088,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 			m.upsertUserView(config.NormalizeView(v))
 		}
 
-		if err := config.Save(m.cfg); err != nil {
+		if err := m.saveDashboardConfig(); err != nil {
 			m.footer = "save config: " + err.Error()
 		} else {
 			_ = m.st.Save()
@@ -1213,6 +1336,46 @@ func (m model) inspectText() string {
 
 // --- overlay rendering ---
 
+func menuDescription(action string) string {
+	switch {
+	case strings.Contains(action, "theme"):
+		return "Preview the active color theme."
+	case strings.Contains(action, "view"):
+		return "Change the progressive pane layout."
+	case strings.Contains(action, "status"):
+		return "Status pane sorting, checks and providers."
+	case strings.Contains(action, "usage"):
+		return "Usage meters, refresh and values."
+	case strings.Contains(action, "fav"):
+		return "Favourite models, probes and sorting."
+	case strings.Contains(action, "stats"):
+		return "Stats rows, sorting and counters."
+	case strings.Contains(action, "integration"):
+		return "Moshi daemon, hooks and output seams."
+	case strings.Contains(action, "settings"):
+		return "All global dashboard settings."
+	case strings.Contains(action, "add"):
+		return "Add a provider or local integration."
+	case strings.Contains(action, "help"):
+		return "Keys and interaction reference."
+	case strings.Contains(action, "quit"):
+		return "Exit status-slug."
+	}
+	return ""
+}
+
+func (m model) menuWindow() (start, end int) {
+	visible := min(len(m.ov.menuItems), max(1, (m.height-6)/2))
+	start = max(0, min(m.ov.menuSel-visible/2, len(m.ov.menuItems)-visible))
+	return start, start + visible
+}
+
+func (m model) menuWidths() (left, right int) {
+	available := max(24, m.width-6)
+	left = min(29, max(14, available*2/5))
+	return left, max(10, available-left-1)
+}
+
 func (m model) renderOverlay(base string) string {
 	var content string
 	switch m.ov.kind {
@@ -1225,27 +1388,41 @@ func (m model) renderOverlay(base string) string {
 	case overlayViewport:
 		content = m.ov.vp.View()
 	case overlayMenu:
-		var builder strings.Builder
-		menuWidth := 0
-		for _, item := range m.ov.menuItems {
-			menuWidth = max(menuWidth, lipgloss.Width(item.label))
-		}
+		leftWidth, rightWidth := m.menuWidths()
 		normal := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+		muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 		selected := lipgloss.NewStyle().
 			Background(lipgloss.Color(m.palette[theme.SelectedBg])).
 			Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
 			Bold(true)
-		for index, item := range m.ov.menuItems {
-			line := fitCells(item.label, menuWidth)
-			if index == m.ov.menuSel {
-				builder.WriteString(selected.Render(line))
-			} else {
-				builder.WriteString(normal.Render(line))
+		divider := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.BoxBorder])).Render("│")
+		var builder strings.Builder
+		builder.WriteString(normal.Render(fitCells("general   status   usage   favourites   stats   integrations", leftWidth+rightWidth+1)))
+		builder.WriteString("\n" + muted.Render(strings.Repeat("─", leftWidth)) + divider + muted.Render(strings.Repeat("─", rightWidth)) + "\n")
+		start, end := m.menuWindow()
+		for index := start; index < end; index++ {
+			item := m.ov.menuItems[index]
+			label, value := item.label, ""
+			if before, after, ok := strings.Cut(item.label, "  ‹ "); ok {
+				label, value = before, "‹ "+after
 			}
-			builder.WriteString("\n")
+			leftTop := fitCells(label, leftWidth)
+			leftBottom := fitCells(value, leftWidth)
+			description := menuDescription(item.action)
+			rightTop := fitCells(description, rightWidth)
+			rightBottom := strings.Repeat(" ", rightWidth)
+			if index == m.ov.menuSel {
+				leftTop, leftBottom = selected.Render(leftTop), selected.Render(leftBottom)
+				rightTop = normal.Render(rightTop)
+			} else {
+				leftTop, leftBottom = normal.Render(leftTop), muted.Render(leftBottom)
+				rightTop = muted.Render(rightTop)
+			}
+			builder.WriteString(leftTop + divider + rightTop + "\n" + leftBottom + divider + rightBottom + "\n")
 		}
-		builder.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.KeyHint])).
-			Render("\nj/k navigate · enter select · esc close"))
+		action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+		hint := action.Render("j/k") + " navigate · " + action.Render("h/l") + " change · " + action.Render("enter") + " select · " + action.Render("esc") + " close"
+		builder.WriteString(fitCells(hint, leftWidth+rightWidth+1))
 		content = builder.String()
 	case overlayInput:
 		content = m.ov.input.View(m.overlayFormWidth()) + "\n\n" +
@@ -1257,7 +1434,14 @@ func (m model) renderOverlay(base string) string {
 
 	title := ""
 	if m.ov.title != "" {
-		title = " " + m.ov.title + " "
+		titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+		titleText := titleStyle.Render(m.ov.title)
+		if m.ov.title == "menu" || strings.HasSuffix(m.ov.title, " menu") {
+			action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+			prefix := strings.TrimSuffix(m.ov.title, "menu")
+			titleText = titleStyle.Render(prefix) + action.Render("m") + titleStyle.Render("enu")
+		}
+		title = " " + titleText + " "
 	}
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

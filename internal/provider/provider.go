@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chriisbusy/status-slug/internal/check"
@@ -108,9 +110,100 @@ func New(kind string) Adapter {
 		return anthropicAdapter{}
 	case "google":
 		return googleAdapter{}
+	case "omp":
+		return ompAdapter{}
 	default:
 		return openaiAdapter{}
 	}
+}
+
+type ompAdapter struct{}
+
+type ompCatalogue struct {
+	Models []struct {
+		Provider string `json:"provider"`
+		ID       string `json:"id"`
+	} `json:"models"`
+}
+
+var ompModelsCache struct {
+	sync.Mutex
+	at   time.Time
+	data []byte
+	err  error
+}
+
+func loadOMPModels(ctx context.Context) ([]byte, error) {
+	ompModelsCache.Lock()
+	defer ompModelsCache.Unlock()
+	if time.Since(ompModelsCache.at) < 30*time.Second && (ompModelsCache.data != nil || ompModelsCache.err != nil) {
+		return ompModelsCache.data, ompModelsCache.err
+	}
+	ompModelsCache.data, ompModelsCache.err = exec.CommandContext(ctx, "omp", "models", "--json").Output()
+	ompModelsCache.at = time.Now()
+	return ompModelsCache.data, ompModelsCache.err
+}
+
+func (ompAdapter) ListModels(ctx context.Context, _ *check.Doer, p config.Provider) ([]string, error) {
+	output, err := loadOMPModels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("omp model catalogue: %w", err)
+	}
+	var catalogue ompCatalogue
+	if err := json.Unmarshal(output, &catalogue); err != nil {
+		return nil, err
+	}
+	var models []string
+	for _, model := range catalogue.Models {
+		if model.Provider == p.BaseURL {
+			models = append(models, model.ID)
+		}
+	}
+	if len(models) == 0 && p.BaseURL == "anthropic" {
+		for _, model := range p.Models {
+			models = append(models, model.ID)
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("omp provider %q has no models", p.BaseURL)
+	}
+	return models, nil
+}
+
+func (adapter ompAdapter) Probe(ctx context.Context, doer *check.Doer, p config.Provider) check.Result {
+	start := time.Now()
+	models, err := adapter.ListModels(ctx, doer, p)
+	result := check.Result{Status: check.OK, Reason: fmt.Sprintf("OMP catalogue: %d models", len(models)), CheckedAt: time.Now(), LatencyMs: float64(time.Since(start).Microseconds()) / 1000}
+	if err != nil {
+		result.Status, result.Reason = check.Down, "OMP catalogue unavailable"
+	}
+	if p.BaseURL == "anthropic" && err == nil {
+		result.Status, result.Reason = check.Unknown, "OMP Claude subscription configured; live auth status is not exposed"
+	}
+	return result
+}
+
+func (adapter ompAdapter) ProbeModel(ctx context.Context, doer *check.Doer, p config.Provider, modelID string) check.Result {
+	start := time.Now()
+	models, err := adapter.ListModels(ctx, doer, p)
+	found := false
+	for _, model := range models {
+		if model == modelID {
+			found = true
+			break
+		}
+	}
+	result := check.Result{Status: check.OK, Reason: "OMP model available", CheckedAt: time.Now(), LatencyMs: float64(time.Since(start).Microseconds()) / 1000}
+	if err != nil || !found {
+		result.Status, result.Reason = check.Down, "OMP model unavailable"
+	} else if p.BaseURL == "anthropic" {
+		result.Status, result.Reason = check.Unknown, "OMP Claude model configured; live auth status is not exposed"
+	}
+	return result
+}
+
+func (ompAdapter) FetchUsage(context.Context, *check.Doer, config.Provider, string) (*UsageResult, error) {
+	return nil, fmt.Errorf("OMP usage is not exposed by the model catalogue")
 }
 
 // --- openai-compatible ---

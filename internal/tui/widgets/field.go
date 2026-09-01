@@ -261,8 +261,7 @@ func (t *TextField) HandleClick(x, y int) bool {
 
 // --- select field ---
 
-// SelectField is a vertical single-choice list with wheel scroll and click
-// selection.
+// SelectField is a one-value btop-style carousel.
 type SelectField struct {
 	Label    string
 	Options  []string
@@ -297,62 +296,34 @@ func (s *SelectField) Value() string {
 const visibleRows = 8
 
 func (s *SelectField) Height(w int) int {
-	n := len(s.Options)
-	if n > visibleRows {
-		n = visibleRows
-	}
-	h := 1 + n
+	height := 2
 	if s.Hint != "" {
-		h++
+		height++
 	}
-	if len(s.Options) > visibleRows {
-		h++ // scroll indicator line
-	}
-	return h
+	return height
 }
 
 func (s *SelectField) View(w int) string {
-	label := s.st.label.Render(s.Label)
+	label := fitPlain(s.Label, w)
+	value := fitPlain("‹ "+s.Value()+" ›", w)
+	var lines []string
 	if s.focused {
-		label = s.st.accent.Render(s.Label)
+		lines = append(lines, s.st.selBg.Render(label), s.st.selBg.Render(value))
+	} else {
+		lines = append(lines, s.st.label.Render(label), s.st.value.Render(value))
 	}
-	var b strings.Builder
-	b.WriteString(label)
 	if s.Hint != "" {
-		b.WriteString("\n" + s.st.muted.Render(s.Hint))
+		lines = append(lines, s.st.muted.Render(fitPlain(s.Hint, w)))
 	}
-	b.WriteString("\n")
-	// Window the options around the selection.
-	if s.Selected < s.offset {
-		s.offset = s.Selected
+	return strings.Join(lines, "\n")
+}
+
+func fitPlain(value string, width int) string {
+	runes := []rune(value)
+	if len(runes) > width {
+		runes = runes[:width]
 	}
-	if s.Selected >= s.offset+visibleRows {
-		s.offset = s.Selected - visibleRows + 1
-	}
-	end := s.offset + visibleRows
-	if end > len(s.Options) {
-		end = len(s.Options)
-	}
-	for i := s.offset; i < end; i++ {
-		opt := s.Options[i]
-		if i == s.Selected {
-			marker := "◆ "
-			if !s.focused {
-				marker = "◇ "
-			}
-			if s.focused {
-				b.WriteString(s.st.selBg.Render("> "+opt) + "\n")
-			} else {
-				b.WriteString(s.st.ok.Render(marker) + s.st.value.Render(opt) + "\n")
-			}
-		} else {
-			b.WriteString(s.st.value.Render("  "+opt) + "\n")
-		}
-	}
-	if len(s.Options) > visibleRows {
-		b.WriteString(s.st.muted.Render(scrollHint(s.offset, len(s.Options), visibleRows)))
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return string(runes) + strings.Repeat(" ", max(0, width-len(runes)))
 }
 
 func scrollHint(offset, total, vis int) string {
@@ -366,19 +337,17 @@ func scrollHint(offset, total, vis int) string {
 	return "  " + more + "scroll"
 }
 
-// HandleKey implements Field.
 func (s *SelectField) HandleKey(key string) (changed, submit bool) {
+	if len(s.Options) == 0 {
+		return false, false
+	}
 	switch key {
-	case "up", "k":
-		if s.Selected > 0 {
-			s.Selected--
-			return true, false
-		}
-	case "down", "j":
-		if s.Selected < len(s.Options)-1 {
-			s.Selected++
-			return true, false
-		}
+	case "left", "h", "up", "k":
+		s.Selected = (s.Selected - 1 + len(s.Options)) % len(s.Options)
+		return true, false
+	case "right", "l", "down", "j":
+		s.Selected = (s.Selected + 1) % len(s.Options)
+		return true, false
 	case "home":
 		s.Selected = 0
 		return true, false
@@ -390,23 +359,16 @@ func (s *SelectField) HandleKey(key string) (changed, submit bool) {
 	}
 	return false, false
 }
-
-// HandleClick implements Field: click an option to select+submit.
 func (s *SelectField) HandleClick(x, y int) bool {
-	headerRows := 1
-	if s.Hint != "" {
-		headerRows++
-	}
-	row := y - headerRows
-	if row < 0 || row >= visibleRows {
+	if y != 1 || len(s.Options) == 0 {
 		return false
 	}
-	idx := s.offset + row
-	if idx >= 0 && idx < len(s.Options) {
-		s.Selected = idx
-		return true
+	if x < len([]rune(s.Value()))/2+2 {
+		s.Selected = (s.Selected - 1 + len(s.Options)) % len(s.Options)
+	} else {
+		s.Selected = (s.Selected + 1) % len(s.Options)
 	}
-	return false
+	return true
 }
 
 // --- multi-select field ---
@@ -489,11 +451,11 @@ func (m *MultiField) View(w int) string {
 		}
 		line := box + m.Options[i]
 		if i == m.cursor && m.focused {
-			b.WriteString(m.st.selBg.Render("> "+line) + "\n")
+			b.WriteString(m.st.selBg.Render(line) + "\n")
 		} else if i < len(m.Checked) && m.Checked[i] {
-			b.WriteString("  " + m.st.ok.Render(box) + m.st.value.Render(m.Options[i]) + "\n")
+			b.WriteString(m.st.ok.Render(box) + m.st.value.Render(m.Options[i]) + "\n")
 		} else {
-			b.WriteString(m.st.value.Render("  "+line) + "\n")
+			b.WriteString(m.st.value.Render(line) + "\n")
 		}
 	}
 	if len(m.Options) > visibleRows {

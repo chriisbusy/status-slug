@@ -212,7 +212,11 @@ func (m model) statusGaugeLine(provider *config.Provider, width int, selected bo
 	}
 	prefixWidth := 2 + nameWidth
 	gaugeWidth := max(5, width-prefixWidth-6-ageWidth-2)
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor(m.palette, status))).Bold(true)
+	nameColor := statusColor(m.palette, status)
+	if status == "unknown" {
+		nameColor = m.palette[theme.Title]
+	}
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor)).Bold(true)
 	line := mark + " " + nameStyle.Render(fitCells(provider.Name, nameWidth)) +
 		lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true).Render(fitCells(p95Text, 6))
 	if showAge {
@@ -225,7 +229,7 @@ func (m model) statusGaugeLine(provider *config.Provider, width int, selected bo
 			Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
 			Background(lipgloss.Color(m.palette[theme.SelectedBg])).
 			Bold(true).
-			Render(line)
+			Render(fitCells(ansi.Strip(line), width))
 	}
 	return line
 }
@@ -529,7 +533,6 @@ func (m model) renderFavouritesPane(w, h int, _ bool) string {
 		return ""
 	}
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelFavourites))).Bold(true)
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	contentWidth := max(1, w-1)
 	compact := contentWidth < 60
@@ -582,7 +585,12 @@ func (m model) renderFavouritesPane(w, h int, _ bool) string {
 		if age != "" {
 			ageText = age
 		}
-		line := accent.Render(fitCells(name, modelWidth))
+		rowColor := statusColor(m.palette, status)
+		if status == "unknown" {
+			rowColor = m.palette[theme.Title]
+		}
+		rowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(rowColor)).Bold(true)
+		line := rowStyle.Render(fitCells(name, modelWidth))
 		if !compact {
 			line += title.Render(fitCells(favourite.provider.Name, providerWidth))
 		}
@@ -901,9 +909,17 @@ func (m model) renderStatsRow(row statsRow, slot int, columns []table.Column, ke
 	if row.age != "" {
 		age = row.age
 	}
-	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor(m.palette, row.status))).Bold(true)
+	statusColorValue := statusColor(m.palette, row.status)
+	if row.status == "unknown" {
+		statusColorValue = m.palette[theme.Title]
+	}
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColorValue)).Bold(true)
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	historyStyle := m.latencyStyle(row.p95)
+	if row.p95 <= 0 {
+		historyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.BarEmpty]))
+	}
 	styled := map[string]string{
 		"slot":     muted.Render(fmt.Sprintf("%d", slot)),
 		"name":     statusStyle.Render(row.name),
@@ -911,7 +927,7 @@ func (m model) renderStatsRow(row statsRow, slot int, columns []table.Column, ke
 		"kind":     muted.Render(row.kind),
 		"status":   m.glyphFor(row.status),
 		"latency":  m.latencyStyle(row.latency).Render(latency),
-		"history":  m.latencyStyle(row.p95).Render(graphText),
+		"history":  historyStyle.Render(graphText),
 		"p95":      title.Render(p95),
 		"age":      muted.Render(age),
 	}
@@ -923,31 +939,17 @@ func (m model) renderStatsRow(row statsRow, slot int, columns []table.Column, ke
 }
 
 func (m model) statsScrollCell(total, offset, visible, row, height int) string {
-	if total <= visible || height < 3 {
-		return " "
+	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelStats)))
+	if height < 1 || total <= visible {
+		return inactive.Render("│")
 	}
 	active := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color(m.panelChrome(panelStats)))
-	if row == 0 {
-		if offset > 0 {
-			return active.Render("▲")
-		}
-		return inactive.Render("▲")
-	}
-	if row == height-1 {
-		if offset+visible < total {
-			return active.Render("▼")
-		}
-		return inactive.Render("▼")
-	}
-	trackLength := max(1, height-2)
-	thumbSize := max(1, trackLength*visible/total)
-	maxOffset := max(1, total-visible)
-	thumbStart := 1 + (trackLength-thumbSize)*offset/maxOffset
+	thumbSize := max(1, height*visible/total)
+	thumbStart := (height - thumbSize) * offset / max(1, total-visible)
 	if row >= thumbStart && row < thumbStart+thumbSize {
 		return active.Render("█")
 	}
-	return " "
+	return inactive.Render("│")
 }
 
 func (m model) statsDetails(width int) []string {
@@ -1005,31 +1007,17 @@ func renderViewport(lines []string, offset, height, width int, palette theme.Pal
 }
 
 func viewportScrollCell(total, offset, visible, row, height int, palette theme.Palette, role theme.Role) string {
-	if total <= visible || height < 3 {
-		return " "
+	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color(palette[role]))
+	if height < 1 || total <= visible {
+		return inactive.Render("│")
 	}
 	active := lipgloss.NewStyle().Foreground(lipgloss.Color(palette[theme.Title])).Bold(true)
-	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color(palette[role]))
-	if row == 0 {
-		if offset > 0 {
-			return active.Render("▲")
-		}
-		return inactive.Render("▲")
-	}
-	if row == height-1 {
-		if offset+visible < total {
-			return active.Render("▼")
-		}
-		return inactive.Render("▼")
-	}
-	trackLength := max(1, height-2)
-	thumbSize := max(1, trackLength*visible/total)
-	maxOffset := max(1, total-visible)
-	thumbStart := 1 + (trackLength-thumbSize)*offset/maxOffset
+	thumbSize := max(1, height*visible/total)
+	thumbStart := (height - thumbSize) * offset / max(1, total-visible)
 	if row >= thumbStart && row < thumbStart+thumbSize {
 		return active.Render("█")
 	}
-	return " "
+	return inactive.Render("│")
 }
 
 // percentile returns the p-th percentile of ring.
