@@ -686,10 +686,10 @@ func TestViewPanelsOmission(t *testing.T) {
 	m := newTestModel()
 	m.st.UI.View = "stats-only"
 	frame := ansi.Strip(m.render())
-	if !strings.Contains(frame, "stats") {
-		t.Error("stats-only view should render stats")
+	if !strings.Contains(frame, "╭─ stats") {
+		t.Error("stats-only view should render stats pane")
 	}
-	if strings.Contains(frame, "status") {
+	if strings.Contains(frame, "╭─ status") {
 		t.Error("stats-only view must omit status pane")
 	}
 }
@@ -888,8 +888,7 @@ func TestNonFocusedPaneScrollUsesItsOwnHeight(t *testing.T) {
 	if m.selectableViewportHeight(panelStats) == m.selectableViewportHeight(panelUsage) {
 		t.Fatal("test requires unequal pane heights")
 	}
-	content := m.renderUsagePane(80, 1<<20, false)
-	total := strings.Count(content, "\n") + 1
+	total := m.usageLineCount()
 	want := max(0, total-m.selectableViewportHeight(panelUsage))
 	if got := m.maxScroll(panelUsage); got != want {
 		t.Fatalf("usage maxScroll = %d, want %d from its own viewport", got, want)
@@ -1008,7 +1007,7 @@ func TestEmptyActionsRenderInPanelBottomBorders(t *testing.T) {
 
 func TestThemeCarouselPreviewsWithoutClosingOrFooter(t *testing.T) {
 	m := newTestModel()
-	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems(), menuSel: 1}
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems(), menuSel: 2}
 	before := m.cfg.Settings.Theme
 	next, cmd := m.menuKey("right")
 	got := next.(model)
@@ -1071,5 +1070,98 @@ func TestDashboardSavePreservesExternallyUpdatedProviders(t *testing.T) {
 	}
 	if got.Settings.Theme != "nord" {
 		t.Fatalf("dashboard setting was not merged: %q", got.Settings.Theme)
+	}
+}
+
+func TestShiftPReversesViewCycle(t *testing.T) {
+	m := newTestModel()
+	m.st.UI.View = "compact"
+	next, _ := m.handleKey(keyPress("P"))
+	if got := next.(model).st.UI.View; got != "full" {
+		t.Fatalf("Shift-P from compact = %q, want full", got)
+	}
+}
+
+func TestSpaceCyclesSelectedMenuValue(t *testing.T) {
+	m := newTestModel()
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems(), menuSel: 1}
+	before := m.activeViewDef().Name
+	next, _ := m.menuKey("space")
+	if got := next.(model).activeViewDef().Name; got == before {
+		t.Fatalf("Space did not cycle view from %q", before)
+	}
+}
+
+func TestAgeColumnsRenderCompleteRelativeAge(t *testing.T) {
+	m := newTestModel()
+	columns, keys := statsColumnsForWidth(90)
+	for _, age := range []string{"1m ago", "just now"} {
+		row := statsRow{name: "provider", provider: "provider", kind: "provider", status: "ok", age: age}
+		got := ansi.Strip(m.renderStatsRow(row, 1, columns, keys, 90))
+		if !strings.Contains(got, age) {
+			t.Fatalf("age %q clipped: %q", age, got)
+		}
+	}
+}
+
+func TestUsageAddAndSetOpenOverlays(t *testing.T) {
+	m := newTestModel()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := config.Save(m.cfg); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := m.runMenuAction("usage.add")
+	if got := next.(model).ov.kind; got != overlayForm {
+		t.Fatalf("usage.add overlay = %v, want form", got)
+	}
+	m = newTestModel()
+	m.focused = panelUsage
+	for index, entry := range m.usageEntries() {
+		if entry.meter != nil {
+			m.sel[panelUsage] = index
+			break
+		}
+	}
+	next, _ = m.runMenuAction("usage.set")
+	if got := next.(model).ov.kind; got != overlayInput {
+		t.Fatalf("usage.set overlay = %v, want input", got)
+	}
+}
+
+func TestPanelOrderCarouselRearrangesCurrentView(t *testing.T) {
+	m := newTestModel()
+	before := append([]string(nil), m.activeViewDef().Panels...)
+	m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
+	next := m.cycleMenuValue("inline:panel-order", 1)
+	after := next.activeViewDef().Panels
+	if len(before) < 2 || after[len(after)-1] != before[0] {
+		t.Fatalf("panel order did not rotate: before=%v after=%v", before, after)
+	}
+}
+
+func TestSettingsRendersAllProbingControls(t *testing.T) {
+	m := newTestModel()
+	overlay := m.newSettingsOverlay()
+	view := ansi.Strip(overlay.form.View(80, 200))
+	for _, label := range []string{"probe timeout", "auto refresh", "probe mode", "history length", "keys source"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("settings omitted %q:\n%s", label, view)
+		}
+	}
+}
+
+func TestStatsDetailPreservesCompleteAge(t *testing.T) {
+	row := statsRow{name: "provider", status: "ok", age: "just now", checks: 2, okPct: 100, p95: 42}
+	for _, width := range []int{45, 80, 100} {
+		got := statsDetailLine(row, width)
+		if ansi.StringWidth(got) != width || !strings.Contains(got, "just now") {
+			t.Fatalf("width %d detail clipped: %q", width, got)
+		}
+	}
+}
+
+func TestHelpDocumentsReverseViewCycle(t *testing.T) {
+	if !strings.Contains(helpMarkdown, "p / shift+p") || !strings.Contains(helpMarkdown, "next / previous") {
+		t.Fatalf("help omits reverse view control")
 	}
 }

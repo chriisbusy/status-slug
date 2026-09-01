@@ -91,6 +91,7 @@ type autoUsageMsg struct {
 }
 type tickMsg time.Time
 type footerClearMsg struct{ seq int }
+type wheelRenderMsg struct{}
 
 func footerClearCmd(seq int) tea.Cmd {
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return footerClearMsg{seq: seq} })
@@ -205,13 +206,16 @@ func (m *model) closeWizard() {
 	if m.wiz == nil {
 		return
 	}
-	if m.wiz.IsDone() {
-		m.cfg = m.wiz.Config()
-		// Reload palette in case nothing else changed; cheap and consistent.
+	updated := m.wiz.Config()
+	savedProvider := len(updated.Providers) > len(m.cfg.Providers)
+	if m.wiz.IsDone() || savedProvider {
+		m.cfg = updated
 		pal, warns := theme.LoadFromSettings(m.cfg.Settings)
 		m.palette = pal
 		if len(warns) > 0 {
 			m.footer = warns[0].Message
+		} else if savedProvider && m.wiz.IsAborted() {
+			m.footer = "provider saved; setup stopped"
 		} else {
 			m.footer = "provider saved"
 		}
@@ -414,7 +418,7 @@ func (m model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		m.width, m.height = m.pendingW, m.pendingH
 		if m.wiz != nil {
 			wm, cmd := m.wiz.UpdateModel(tea.WindowSizeMsg{Width: m.width, Height: m.height})
-			m.wiz = &wm
+			m.wiz = wm
 			return m, cmd
 		}
 		return m, nil
@@ -433,7 +437,7 @@ func (m model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	// Wizard popup is modal: it gets every other message first.
 	if m.wiz != nil {
 		wm, cmd := m.wiz.UpdateModel(msg)
-		m.wiz = &wm
+		m.wiz = wm
 		if wm.IsDone() || wm.IsAborted() {
 			m.closeWizard()
 			return m, nil
@@ -452,8 +456,11 @@ func (m model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		return m.handleMouseMotion(msg.Mouse())
 	case tea.MouseReleaseMsg:
 		return m.handleMouseRelease(msg.Mouse())
+	case wheelRenderMsg:
+		return m, nil
 	case tea.MouseWheelMsg:
-		return m.handleWheel(msg.Mouse())
+		next, cmd := m.handleWheel(msg.Mouse())
+		return next, tea.Batch(cmd, func() tea.Msg { return wheelRenderMsg{} })
 
 	case checkResultMsg:
 		return m.handleCheckResult(msg)
@@ -583,6 +590,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ov = m.newMenuOverlay(panelStats)
 	case "p":
 		return m.cycleView(), nil
+	case "P":
+		return m.cycleViewDirection(-1), nil
 	case "e":
 		next := m.cycleTheme()
 		return next, footerClearCmd(next.footerSeq)
@@ -890,15 +899,19 @@ func (m model) handleAutoUsage(msg autoUsageMsg) (tea.Model, tea.Cmd) {
 // --- views ---
 
 func (m model) cycleView() model {
+	return m.cycleViewDirection(1)
+}
+
+func (m model) cycleViewDirection(direction int) model {
 	views := m.viewCycleOrder()
 	current := m.st.UI.View
 	if current == "" {
 		current = "full"
 	}
 	next := views[0]
-	for i, v := range views {
-		if v == current {
-			next = views[(i+1)%len(views)]
+	for i, view := range views {
+		if view == current {
+			next = views[(i+direction+len(views))%len(views)]
 			break
 		}
 	}
@@ -1432,6 +1445,7 @@ func (m model) renderFooter() string {
 		item("tab", " focus"),
 		item("m", " menu"),
 		item("p", " views"),
+		item("shift+p", " previous"),
 		item("?", " help"),
 		item("q", " quit"),
 	}

@@ -165,9 +165,9 @@ func (m model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseWheelDown:
 		m.scroll[p] += 3
-		maxScroll := m.maxScroll(p)
-		if m.scroll[p] > maxScroll {
-			m.scroll[p] = maxScroll
+		maximum := m.maxScroll(p)
+		if m.scroll[p] > maximum {
+			m.scroll[p] = maximum
 		}
 	}
 	return m, nil
@@ -182,8 +182,7 @@ func (m model) maxScroll(panel panelID) int {
 	case panelFavourites:
 		total = len(m.favouriteList())
 	case panelUsage:
-		content := m.renderUsagePane(80, 1<<20, false)
-		total = strings.Count(content, "\n") + 1
+		total = m.usageLineCount()
 	case panelStats:
 		total = len(m.statsRows())
 	}

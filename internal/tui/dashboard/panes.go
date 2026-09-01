@@ -101,6 +101,16 @@ func (m model) renderStatusPane(w, h int, _ bool) string {
 		history = providerState.Ring
 	}
 	graph := m.statusGraph(history, selectedProvider, graphWidth, h)
+	if graphWidth >= 60 {
+		detailWidth := min(34, graphWidth/2)
+		for index, detail := range m.statusDetailLines(selectedProvider) {
+			row := index + 1
+			if row >= len(graph)-1 {
+				break
+			}
+			graph[row] = fitCells(detail, detailWidth) + ansi.Cut(graph[row], detailWidth, graphWidth)
+		}
+	}
 	right := make([]string, h)
 	right[0] = m.statusHeaderLine(rightWidth)
 	moshiLines := m.moshiDashboardLines(rightWidth)
@@ -123,6 +133,26 @@ func (m model) renderStatusPane(w, h int, _ bool) string {
 			viewportScrollCell(len(providers), offset, visibleRows, row, h, m.palette, theme.PaneStatus)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) statusDetailLines(providerConfig *config.Provider) []string {
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	lines := []string{title.Render(providerConfig.Name)}
+	providerState := m.st.Providers[providerConfig.Name]
+	if providerState == nil {
+		return append(lines, muted.Render("not measured"))
+	}
+	if providerState.LastCheck != nil {
+		lines = append(lines, muted.Render(providerState.LastCheck.Status+" · "+providerState.LastCheck.Reason))
+	}
+	counter := providerState.Counters
+	lines = append(lines,
+		muted.Render(fmt.Sprintf("checks %d · ok %d · account %d · down %d", counter.Checks, counter.OK, counter.Account, counter.Down)),
+		muted.Render(fmt.Sprintf("p50 %.0fms · p95 %.0fms · samples %d", percentile(providerState.Ring, 50), percentile(providerState.Ring, 95), len(providerState.Ring))),
+		muted.Render(fmt.Sprintf("models %d · errors %d", len(providerState.Models), len(providerState.RecentErrors))),
+	)
+	return lines
 }
 
 func (m model) renderEmptyStatus(width, height int) string {
@@ -184,7 +214,7 @@ func (m model) statusHeaderLine(width int) string {
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
 	nameWidth, ageWidth := 18, 0
 	if width >= 46 {
-		ageWidth = 6
+		ageWidth = 9
 	}
 	line := "  " + title.Render(statsCell("provider/model", nameWidth)) + title.Render(statsCell("p95", 6))
 	if ageWidth > 0 {
@@ -215,7 +245,7 @@ func (m model) statusGaugeLine(provider *config.Provider, width int, selected bo
 	showAge := width >= 46
 	ageWidth := 0
 	if showAge {
-		ageWidth = 6
+		ageWidth = 9
 	}
 	p95Text := "—"
 	if p95 > 0 {
@@ -547,7 +577,7 @@ func (m model) renderFavouritesPane(w, h int, _ bool) string {
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	contentWidth := max(1, w-1)
 	compact := contentWidth < 60
-	modelWidth, providerWidth, nowWidth, p95Width, ageWidth, graphWidth := 18, 13, 8, 6, 6, 7
+	modelWidth, providerWidth, nowWidth, p95Width, ageWidth, graphWidth := 18, 13, 8, 6, 9, 7
 	if compact {
 		providerWidth = 0
 		modelWidth = max(8, contentWidth-nowWidth-p95Width-ageWidth-graphWidth)
@@ -651,7 +681,7 @@ type statsRow struct {
 
 func statsColumnsForWidth(width int) ([]table.Column, []string) {
 	if width >= 80 {
-		programWidth := max(12, width-54)
+		programWidth := max(12, width-57)
 		return []table.Column{
 			{Title: "slot", Width: 6},
 			{Title: "program", Width: programWidth},
@@ -661,11 +691,11 @@ func statsColumnsForWidth(width int) ([]table.Column, []string) {
 			{Title: "latency", Width: 8},
 			{Title: "graph", Width: 7},
 			{Title: "p95", Width: 5},
-			{Title: "age", Width: 6},
+			{Title: "age", Width: 9},
 		}, []string{"slot", "name", "provider", "kind", "status", "latency", "history", "p95", "age"}
 	}
 	if width >= 55 {
-		programWidth := max(12, width-38)
+		programWidth := max(12, width-41)
 		return []table.Column{
 			{Title: "slot", Width: 6},
 			{Title: "program", Width: programWidth},
@@ -673,17 +703,17 @@ func statsColumnsForWidth(width int) ([]table.Column, []string) {
 			{Title: "●", Width: 2},
 			{Title: "graph", Width: 7},
 			{Title: "p95", Width: 5},
-			{Title: "age", Width: 6},
+			{Title: "age", Width: 9},
 		}, []string{"slot", "name", "provider", "status", "history", "p95", "age"}
 	}
-	programWidth := max(8, width-28)
+	programWidth := max(8, width-31)
 	return []table.Column{
 		{Title: "●", Width: 2},
 		{Title: "program", Width: programWidth},
 		{Title: "latency", Width: 8},
 		{Title: "graph", Width: 7},
 		{Title: "p95", Width: 5},
-		{Title: "age", Width: 6},
+		{Title: "age", Width: 9},
 	}, []string{"status", "name", "latency", "history", "p95", "age"}
 }
 
@@ -1001,7 +1031,48 @@ func (m model) statsDetails(width int) []string {
 				fitCells(recent.Status+" · "+recent.Reason, width)))
 		}
 	}
+	rows := m.statsRows()
+	if len(rows) > 0 {
+		lines = append(lines, title.Render("row detail"))
+		for _, row := range rows {
+			lines = append(lines, muted.Render(statsDetailLine(row, width)))
+		}
+	}
 	return lines
+}
+
+func statsDetailLine(row statsRow, width int) string {
+	age := row.age
+	if age == "" {
+		age = "—"
+	}
+	suffix := fmt.Sprintf(" status %-8s checks %-4d ok %3d%% p95 %4.0f age %s",
+		row.status, row.checks, row.okPct, row.p95, age)
+	if ansi.StringWidth(suffix)+8 > width {
+		suffix = fmt.Sprintf(" p95 %4.0f age %s", row.p95, age)
+	}
+	nameWidth := max(1, width-ansi.StringWidth(suffix))
+	return fitCells(row.name, nameWidth) + suffix
+}
+
+func (m model) usageLineCount() int {
+	total := 0
+	for _, providerConfig := range m.cfg.Providers {
+		total++
+		if providerConfig.Note != "" {
+			total++
+		}
+		for _, meter := range providerConfig.Meters {
+			total += 2
+			if meter.Cap > 0 {
+				total++
+			}
+		}
+		if providerState := m.st.Providers[providerConfig.Name]; providerState != nil && providerState.Counters.Checks > 0 {
+			total++
+		}
+	}
+	return total
 }
 
 func renderViewport(lines []string, offset, height, width int, palette theme.Palette, role theme.Role) string {

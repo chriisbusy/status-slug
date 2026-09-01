@@ -477,7 +477,7 @@ func (m *MultiField) HandleKey(key string) (changed, submit bool) {
 			m.cursor++
 			return true, false
 		}
-	case " ":
+	case " ", "space":
 		if m.cursor < len(m.Checked) {
 			m.Checked[m.cursor] = !m.Checked[m.cursor]
 			return true, false
@@ -557,9 +557,11 @@ func (c *ConfirmField) View(w int) string {
 // HandleKey implements Field.
 func (c *ConfirmField) HandleKey(key string) (changed, submit bool) {
 	switch key {
-	case " ", "enter":
+	case " ", "space", "left", "right", "h", "l":
 		c.Value = !c.Value
-		return true, key == "enter"
+		return true, false
+	case "enter":
+		return true, true
 	}
 	return false, false
 }

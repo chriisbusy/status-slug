@@ -170,19 +170,16 @@ func blinkTick() tea.Cmd {
 	return tea.Tick(600*time.Millisecond, func(time.Time) tea.Msg { return blinkMsg{} })
 }
 
-func (m Model) Init() tea.Cmd { return blinkTick() }
+func (m *Model) Init() tea.Cmd { return blinkTick() }
 
-// UpdateModel is Update with a concrete return type for embedding hosts.
-func (m Model) UpdateModel(msg tea.Msg) (Model, tea.Cmd) {
-	tm, cmd := m.Update(translateMouse(msg))
-	if wm, ok := tm.(Model); ok {
-		return wm, cmd
-	}
+// UpdateModel updates the embedded wizard in place.
+func (m *Model) UpdateModel(msg tea.Msg) (*Model, tea.Cmd) {
+	_, cmd := m.Update(translateMouse(msg))
 	return m, cmd
 }
 
 // Update implements tea.Model.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -208,6 +205,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.form == nil {
 			return m, nil
+		}
+		if key == "shift+tab" && m.form.AtFirst() {
+			if m.harvest != nil {
+				m.harvest()
+			}
+			return m.previousStep()
 		}
 		if m.form.HandleKey(key) {
 			return m.stepCompleted()
@@ -278,7 +281,26 @@ func (m Model) formLocal(x, y int) (int, int) {
 }
 
 // stepCompleted runs after a form completes: harvest, transition, dispatch.
-func (m Model) stepCompleted() (tea.Model, tea.Cmd) {
+func (m *Model) previousStep() (tea.Model, tea.Cmd) {
+	m.pendingDone = nil
+	switch m.step {
+	case stepKeySource:
+		m.enterIdentity()
+		return m, nil
+	case stepKeyDetail, stepValidate, stepModels:
+		return m.enterKeySource()
+	case stepMeters, stepMeterForm:
+		return m.enterModelsForm()
+	case stepSummary:
+		return m.enterMeters()
+	case stepAddAnother:
+		return m.enterSummary()
+	default:
+		return m, nil
+	}
+}
+
+func (m *Model) stepCompleted() (tea.Model, tea.Cmd) {
 	if m.harvest != nil {
 		m.harvest()
 	}
@@ -457,12 +479,12 @@ func (m Model) View() tea.View {
 // Run executes the wizard standalone, returning the updated config.
 func Run(cfg config.Config, reconfigure string) (config.Config, error) {
 	m := New(cfg, reconfigure)
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(&m)
 	fm, err := p.Run()
 	if err != nil {
 		return cfg, err
 	}
-	final := fm.(Model)
+	final := fm.(*Model)
 	if final.err != nil {
 		return final.cfg, final.err
 	}

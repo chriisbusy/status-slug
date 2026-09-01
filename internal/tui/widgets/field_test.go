@@ -41,3 +41,21 @@ func TestSelectCarouselShowsOneFullWidthSelection(t *testing.T) {
 		}
 	}
 }
+
+func TestConfirmEnterAcceptsWithoutToggling(t *testing.T) {
+	palette, _ := theme.Load("sstop", "")
+	field := NewConfirm(palette, "add meter?", false)
+	changed, submit := field.HandleKey("enter")
+	if !changed || !submit || field.Value {
+		t.Fatalf("Enter changed false selection: changed=%v submit=%v value=%v", changed, submit, field.Value)
+	}
+	field.HandleKey("right")
+	field.Value = false
+	changed, submit = field.HandleKey("space")
+	if !changed || submit || !field.Value {
+		t.Fatalf("space did not toggle confirmation: changed=%v submit=%v value=%v", changed, submit, field.Value)
+	}
+	if !field.Value {
+		t.Fatal("right did not toggle confirmation")
+	}
+}

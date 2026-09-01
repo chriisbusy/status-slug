@@ -272,6 +272,7 @@ func (m model) runConfirm(action string) (tea.Model, tea.Cmd) {
 
 func (m model) mainMenuItems() []menuItem {
 	return []menuItem{
+		{"panel order  ‹ " + strings.Join(m.activeViewDef().Panels, " · ") + " ›", "inline:panel-order"},
 		{"view  ‹ " + m.activeViewDef().Name + " ›", "main.view"},
 		{"theme  ‹ " + m.cfg.Settings.Theme + " ›", "main.theme"},
 		{"status panel", "main.panel:status"},
@@ -355,6 +356,19 @@ func (m model) cycleMenuValue(action string, direction int) model {
 	case "inline:status-group":
 		m.prefs.statusGroup = !m.prefs.statusGroup
 		m.ov = m.newMenuOverlay(panelStatus)
+	case "inline:panel-order":
+		view := m.activeViewDef()
+		if len(view.Panels) > 1 {
+			panels := append([]string(nil), view.Panels...)
+			if direction > 0 {
+				panels = append(panels[1:], panels[0])
+			} else {
+				panels = append([]string{panels[len(panels)-1]}, panels[:len(panels)-1]...)
+			}
+			view.Panels = panels
+			m.upsertUserView(view)
+		}
+		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
 	case "inline:fav-sort":
 		m.prefs.favSort = cycle([]string{"name", "latency", "status"}, m.prefs.favSort)
 		m.ov = m.newMenuOverlay(panelFavourites)
@@ -455,7 +469,7 @@ func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 				return m.cycleMainValue(action, direction), nil
 			}
 		}
-	case "enter":
+	case "enter", " ", "space":
 		if m.ov.menuSel >= len(m.ov.menuItems) {
 			m.ov = overlayState{}
 			return m, nil
@@ -555,18 +569,21 @@ func (m model) runMenuAction(action string) (tea.Model, tea.Cmd) {
 		}
 
 	case action == "usage.set":
-		return m, m.openSetValueInput()
+		cmd := m.openSetValueInput()
+		return m, cmd
 	case action == "usage.refresh":
 		if !m.checking {
 			cmd := m.startCheckAll() // auto meters refresh on check
 			return m, cmd
 		}
 	case action == "usage.add":
-		return m, m.openMeterForm("")
+		cmd := m.openMeterForm("")
+		return m, cmd
 	case action == "usage.edit":
 		// Edit the meter under the usage selection.
 		if entry := m.selectedMeterEntry(); entry != nil && entry.meter != nil {
-			return m, m.openMeterForm(entry.meter.Name)
+			cmd := m.openMeterForm(entry.meter.Name)
+			return m, cmd
 		} else {
 			m.footer = "select a meter row first"
 		}
@@ -699,7 +716,7 @@ func (m model) newInputOverlay(title, inputFor, placeholder string) overlayState
 }
 
 // openSetValueInput opens a textinput for the selected meter.
-func (m model) openSetValueInput() tea.Cmd {
+func (m *model) openSetValueInput() tea.Cmd {
 	entry := m.selectedMeterEntry()
 	if entry == nil || entry.meter == nil {
 		m.footer = "select a meter row first (usage pane)"
@@ -776,7 +793,7 @@ func (m model) handleInputSubmit(inputFor, val string) (tea.Model, tea.Cmd) {
 
 // --- meter form (widgets) ---
 
-func (m model) openMeterForm(editName string) tea.Cmd {
+func (m *model) openMeterForm(editName string) tea.Cmd {
 	// Which provider? Selected in status pane, else first enabled.
 	p := m.selectedProvider()
 	if p == nil && len(m.cfg.Providers) > 0 {
@@ -953,6 +970,7 @@ func (m model) newSettingsOverlay() overlayState {
 		widgets.NewNote(m.palette, "appearance", "theme, continuous pane splits, chrome"),
 		themeF, viewF, topRatioF, leftRatioF, usageRatioF, borderF, glyphF, bgF,
 		widgets.NewNote(m.palette, "probing", "timeouts, refresh, key storage"),
+		timeoutF, refreshF, modeF, histF, keysF,
 		widgets.NewNote(m.palette, "integrations", "press g for Moshi setup/status; loopback API setting below"),
 		serveF,
 		widgets.NewNote(m.palette, "behavior & panels", "toggles and pane visibility"),
@@ -1342,6 +1360,8 @@ func menuDescription(action string) string {
 		return "Preview the active color theme."
 	case strings.Contains(action, "view"):
 		return "Change the progressive pane layout."
+	case strings.Contains(action, "panel-order"):
+		return "Rearrange panel admission order."
 	case strings.Contains(action, "status"):
 		return "Status pane sorting, checks and providers."
 	case strings.Contains(action, "usage"):
@@ -1464,7 +1484,7 @@ const helpMarkdown = `# sslug keys
 | enter | check selected |
 | i | inspect selected row |
 | s / u / f / t | pane menus |
-| p | cycle view presets |
+| p / shift+p | next / previous view preset |
 | e | cycle themes (live) |
 | g | integrations |
 | o | settings |

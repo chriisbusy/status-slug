@@ -58,6 +58,9 @@ func (f *Form) refocus() {
 // Done reports the form was submitted past its last field.
 func (f *Form) Done() bool { return f.done }
 
+// AtFirst reports whether focus is on the first focusable field.
+func (f *Form) AtFirst() bool { return f.focused == f.firstFocusable(0) }
+
 // HandleKey routes a key: focused field first, then navigation.
 // Returns submit=true when the form completes.
 func (f *Form) HandleKey(key string) bool {
