@@ -184,7 +184,7 @@ func (m model) statusHeaderLine(width int) string {
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
 	nameWidth, ageWidth := 18, 0
 	if width >= 46 {
-		ageWidth = 5
+		ageWidth = 6
 	}
 	line := "  " + title.Render(statsCell("provider/model", nameWidth)) + title.Render(statsCell("p95", 6))
 	if ageWidth > 0 {
@@ -215,7 +215,7 @@ func (m model) statusGaugeLine(provider *config.Provider, width int, selected bo
 	showAge := width >= 46
 	ageWidth := 0
 	if showAge {
-		ageWidth = 5
+		ageWidth = 6
 	}
 	p95Text := "—"
 	if p95 > 0 {
@@ -547,7 +547,7 @@ func (m model) renderFavouritesPane(w, h int, _ bool) string {
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	contentWidth := max(1, w-1)
 	compact := contentWidth < 60
-	modelWidth, providerWidth, nowWidth, p95Width, ageWidth, graphWidth := 18, 13, 8, 6, 5, 7
+	modelWidth, providerWidth, nowWidth, p95Width, ageWidth, graphWidth := 18, 13, 8, 6, 6, 7
 	if compact {
 		providerWidth = 0
 		modelWidth = max(8, contentWidth-nowWidth-p95Width-ageWidth-graphWidth)
@@ -651,7 +651,7 @@ type statsRow struct {
 
 func statsColumnsForWidth(width int) ([]table.Column, []string) {
 	if width >= 80 {
-		programWidth := max(12, width-53)
+		programWidth := max(12, width-54)
 		return []table.Column{
 			{Title: "slot", Width: 6},
 			{Title: "program", Width: programWidth},
@@ -661,11 +661,11 @@ func statsColumnsForWidth(width int) ([]table.Column, []string) {
 			{Title: "latency", Width: 8},
 			{Title: "graph", Width: 7},
 			{Title: "p95", Width: 5},
-			{Title: "age", Width: 5},
+			{Title: "age", Width: 6},
 		}, []string{"slot", "name", "provider", "kind", "status", "latency", "history", "p95", "age"}
 	}
 	if width >= 55 {
-		programWidth := max(12, width-37)
+		programWidth := max(12, width-38)
 		return []table.Column{
 			{Title: "slot", Width: 6},
 			{Title: "program", Width: programWidth},
@@ -673,17 +673,17 @@ func statsColumnsForWidth(width int) ([]table.Column, []string) {
 			{Title: "●", Width: 2},
 			{Title: "graph", Width: 7},
 			{Title: "p95", Width: 5},
-			{Title: "age", Width: 5},
+			{Title: "age", Width: 6},
 		}, []string{"slot", "name", "provider", "status", "history", "p95", "age"}
 	}
-	programWidth := max(8, width-27)
+	programWidth := max(8, width-28)
 	return []table.Column{
 		{Title: "●", Width: 2},
 		{Title: "program", Width: programWidth},
 		{Title: "latency", Width: 8},
 		{Title: "graph", Width: 7},
 		{Title: "p95", Width: 5},
-		{Title: "age", Width: 5},
+		{Title: "age", Width: 6},
 	}, []string{"status", "name", "latency", "history", "p95", "age"}
 }
 
