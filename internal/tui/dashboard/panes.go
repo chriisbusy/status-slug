@@ -907,32 +907,63 @@ func (m model) renderStatsGraphPane(width, height int) string {
 		return ""
 	}
 	contentWidth := max(1, width-1)
+	selected := min(max(0, m.sel[panelStats]), len(rows)-1)
+	row := rows[selected]
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
-	headerText := "provider/model     p95    ok%   checks"
-	if contentWidth < 45 {
-		headerText = "provider/model  p95  ok%  chk"
+	muted := mutedStyle(m.palette)
+	identity := fitCells(row.name+" · "+row.provider, contentWidth)
+	if m.focused == panelStats {
+		identity = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
+			Background(lipgloss.Color(m.palette[theme.SelectedBg])).Bold(true).Render(identity)
+	} else {
+		identity = title.Render(identity)
 	}
-	lines := []string{title.Render(fitCells(headerText, contentWidth))}
-	for index, row := range rows {
-		p95Text := "—"
-		if row.p95 > 0 {
-			p95Text = fmt.Sprintf("%.0f", row.p95)
-		}
-		labelWidth := max(8, contentWidth-24)
-		line := statsCell(row.name, labelWidth) + statsCell(p95Text, 7) +
-			statsCell(fmt.Sprintf("%d%%", row.okPct), 7) + fmt.Sprintf("%d", row.checks)
-		line = fitCells(line, contentWidth)
-		if index == m.sel[panelStats] && m.focused == panelStats {
-			line = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
-				Background(lipgloss.Color(m.palette[theme.SelectedBg])).Bold(true).Render(line)
-		}
-		half := max(6, (contentWidth-15)/2)
-		bars := muted.Render("p95 ") + m.meterCells(clampUnit(row.p95/600), half) + muted.Render("  ok ") +
-			m.meterCells(clampUnit(float64(row.okPct)/100), max(6, contentWidth-half-11))
-		lines = append(lines, line, fitCells(bars, contentWidth))
+	age := displayAge(row.age)
+	if age == "" {
+		age = "—"
 	}
-	return renderViewport(lines, m.scroll[panelStats]*2, height, width, m.palette, theme.PaneStats)
+	lines := []string{
+		identity,
+		muted.Render(fitCells(fmt.Sprintf("status %s · age %s · checks %d", row.status, age, row.checks), contentWidth)),
+	}
+	type metric struct {
+		label, value string
+		percent      float64
+		role         theme.Role
+	}
+	accountPercent, downPercent := 0.0, 0.0
+	if row.checks > 0 {
+		accountPercent = float64(row.account) / float64(row.checks)
+		downPercent = float64(row.down) / float64(row.checks)
+	}
+	metrics := []metric{
+		{"success", fmt.Sprintf("%d%%", row.okPct), float64(row.okPct) / 100, theme.OK},
+		{"p95 latency", fmt.Sprintf("%.0fms", row.p95), row.p95 / 600, theme.Warn},
+		{"p50 latency", fmt.Sprintf("%.0fms", row.p50), row.p50 / 600, theme.BoxBorder},
+		{"account", fmt.Sprintf("%d", row.account), accountPercent, theme.Warn},
+		{"down", fmt.Sprintf("%d", row.down), downPercent, theme.Err},
+	}
+	blocks := max(1, (height-len(lines))/2)
+	for _, metric := range metrics[:min(blocks, len(metrics))] {
+		label := title.Render(metric.label)
+		value := title.Render(metric.value)
+		lines = append(lines,
+			fitCells(label+strings.Repeat(" ", max(1, contentWidth-ansi.StringWidth(label)-ansi.StringWidth(value)))+value, contentWidth),
+			m.btopMeterBar(clampUnit(metric.percent), contentWidth, metric.role),
+		)
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", contentWidth))
+	}
+	return renderViewport(lines[:height], 0, height, width, m.palette, theme.PaneStats)
+}
+
+func (m model) btopMeterBar(percent float64, width int, role theme.Role) string {
+	percent = clampUnit(percent)
+	filled := int(percent*float64(width) + 0.5)
+	fill := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[role])).Render(strings.Repeat("█", filled))
+	empty := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.BarEmpty])).Render(strings.Repeat("█", width-filled))
+	return fill + empty
 }
 
 func (m model) renderStatsPane(width, height int, _ bool) string {

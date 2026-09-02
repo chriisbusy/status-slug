@@ -227,7 +227,7 @@ func TestRenderStatsPaneWithoutChecksShowsUnknownRows(t *testing.T) {
 	m := newTestModel()
 	m.st = state.New()
 	got := ansi.Strip(m.renderStatsPane(60, 10, false))
-	for _, want := range []string{"provider/model", "OKProv", "mock-alpha"} {
+	for _, want := range []string{"OKProv", "status unknown", "success", "p95 latency"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stats pane missing configured unknown row %q: %q", want, got)
 		}
@@ -339,7 +339,7 @@ func TestStatsColumnsKeepProcessGrammarAtNarrowWidth(t *testing.T) {
 func TestStatsPaneCompactRenderShowsProcessColumns(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderStatsPane(38, 10, false))
-	for _, want := range []string{"provider/model", "p95", "ok%", "chk", "OKProv"} {
+	for _, want := range []string{"OKProv", "status", "success", "p95 latency"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("compact stats pane missing %q in:\n%s", want, got)
 		}
@@ -1228,5 +1228,32 @@ func TestDashboardSaveRederivesOMPUsageMeters(t *testing.T) {
 	}
 	if len(reloaded.Providers[0].Meters) != 0 {
 		t.Fatalf("derived meters should not persist to TOML: %+v", reloaded.Providers[0].Meters)
+	}
+}
+
+func TestStatsGraphUsesContinuousBackgroundBars(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Settings.StatsMode = "graph"
+	got := m.renderStatsPane(70, 14, false)
+	if strings.Contains(ansi.Strip(got), "■") {
+		t.Fatalf("stats graph reused square-cell usage meter:\n%s", ansi.Strip(got))
+	}
+	if !strings.Contains(ansi.Strip(got), "█") {
+		t.Fatalf("stats graph missing continuous btop bars: %q", ansi.Strip(got))
+	}
+}
+
+func TestStatsTableDiffersFromFavourites(t *testing.T) {
+	_, keys := statsColumnsForWidth(100)
+	joined := strings.Join(keys, ",")
+	for _, want := range []string{"checks", "ok%", "account", "down", "p50", "p95", "age"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("stats table missing %q: %s", want, joined)
+		}
+	}
+	for _, forbidden := range []string{"latency", "history"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("stats table still duplicates favourites with %q: %s", forbidden, joined)
+		}
 	}
 }

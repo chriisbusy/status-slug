@@ -68,6 +68,9 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		contentW = paneW - 3 // borders plus the inset scrollbar column.
 	}
 	// Stats header click cycles sort on the rendered process-table column.
+	if p == panelStats && m.statsGraphMode(contentW) && localRow >= 0 {
+		return m, nil
+	}
 	if p == panelStats && localRow == 0 && !m.statsGraphMode(contentW) {
 		columns, keys := statsColumnsForWidth(contentW)
 		column := statsColumnAt(x-paneX-1, columns)
@@ -194,11 +197,10 @@ func (m model) maxScroll(panel panelID) int {
 	case panelUsage:
 		total = m.usageLineCount()
 	case panelStats:
-		total = len(m.statsRows())
 		if m.statsGraphMode(m.paneContentWidthFor(panelStats)) {
-			visible := max(1, (m.paneContentHeightFor(panelStats)-1)/2)
-			return max(0, total-visible)
+			return 0
 		}
+		total = len(m.statsRows())
 	}
 	return max(0, total-m.selectableViewportHeight(panel))
 }

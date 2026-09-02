@@ -720,6 +720,10 @@ func (m *model) moveSelection(delta int) {
 		m.scroll[panelStatus] = 0
 		return
 	}
+	if m.focused == panelStats && m.statsGraphMode(m.paneContentWidthFor(panelStats)) {
+		m.scroll[panelStats] = 0
+		return
+	}
 	if position < m.scroll[m.focused] {
 		m.scroll[m.focused] = position
 	}
