@@ -246,6 +246,15 @@ func New(cfg config.Config, st *state.File) model {
 		settingWarnings = append(settingWarnings, fmt.Sprintf("unknown graph style %q — using tty", cfg.Settings.GraphStyle))
 		cfg.Settings.GraphStyle = "tty"
 	}
+	switch cfg.Settings.StatsMode {
+	case "", "auto":
+		cfg.Settings.StatsMode = "auto"
+	case "table", "graph":
+	default:
+		settingWarnings = append(settingWarnings, fmt.Sprintf("unknown stats mode %q — using auto", cfg.Settings.StatsMode))
+		cfg.Settings.StatsMode = "auto"
+	}
+	ensureOMPUsageMeters(&cfg)
 	palette, warns := theme.LoadFromSettings(cfg.Settings)
 	m := model{
 		cfg:        cfg,
@@ -277,6 +286,31 @@ func New(cfg config.Config, st *state.File) model {
 		m.openWizard("")
 	}
 	return m
+}
+
+// ensureOMPUsageMeters derives live quota meters for OMP subscription providers.
+func ensureOMPUsageMeters(cfg *config.Config) {
+	for providerIndex := range cfg.Providers {
+		providerConfig := &cfg.Providers[providerIndex]
+		if providerConfig.Kind != "omp" {
+			continue
+		}
+		for _, window := range []struct{ id, name string }{{"5h", "5 hour budget"}, {"7d", "7 day budget"}} {
+			autoID := "omp:" + providerConfig.BaseURL + ":" + window.id
+			found := false
+			for _, meter := range providerConfig.Meters {
+				if meter.Auto == autoID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				providerConfig.Meters = append(providerConfig.Meters, config.Meter{
+					Name: window.name, Unit: "percent", Kind: "auto", Auto: autoID, Cap: 100, Reset: "never",
+				})
+			}
+		}
+	}
 }
 
 // loadPrefs reads persisted panel prefs from state.
@@ -331,6 +365,7 @@ func (m *model) saveDashboardConfig() error {
 		return err
 	}
 	m.cfg = latest
+	ensureOMPUsageMeters(&m.cfg)
 	return nil
 }
 
@@ -707,13 +742,14 @@ func (m model) pageSize() int {
 func (m model) selectableViewportHeight(panel panelID) int {
 	height := m.paneContentHeightFor(panel)
 	switch panel {
-	case panelStatus:
-		reserved := min(len(m.moshiDashboardLines(1)), max(0, height-1))
-		height -= 1 + reserved
-	case panelFavourites:
+	case panelStatus, panelFavourites:
 		height--
 	case panelStats:
-		height -= 2
+		if m.statsGraphMode(m.paneContentWidthFor(panelStats)) {
+			height = max(1, (height-1)/2)
+		} else {
+			height -= 2
+		}
 	}
 	return max(1, height)
 }
@@ -730,6 +766,15 @@ func (m model) paneContentHeightFor(panel panelID) int {
 	for _, rect := range m.paneLayout() {
 		if rect.panel == panel {
 			return max(1, rect.h-2)
+		}
+	}
+	return 1
+}
+
+func (m model) paneContentWidthFor(panel panelID) int {
+	for _, rect := range m.paneLayout() {
+		if rect.panel == panel {
+			return max(1, rect.w-2)
 		}
 	}
 	return 1

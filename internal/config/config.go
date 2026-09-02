@@ -34,6 +34,7 @@ type Settings struct {
 	AlertBell     bool   `toml:"alert_bell"`
 	BorderStyle   string `toml:"border_style"`
 	GraphStyle    string `toml:"graph_style"`
+	StatsMode     string `toml:"stats_mode"`
 	// ThemeBackground paints the theme's bg color over the whole terminal.
 	ThemeBackground bool   `toml:"theme_background"`
 	ServeListen     string `toml:"serve_listen,omitempty"` // saved by serve --listen
@@ -96,6 +97,7 @@ func Default() Config {
 			BorderStyle:     "rounded",
 			GraphStyle:      "tty",
 			ThemeBackground: true,
+			StatsMode:       "auto",
 		},
 	}
 }

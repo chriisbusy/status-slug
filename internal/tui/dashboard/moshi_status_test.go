@@ -79,7 +79,7 @@ func TestMoshiDashboardLinesDegradeHonestly(t *testing.T) {
 	}
 }
 
-func TestMoshiStatusRowsRemainVisibleWhenProvidersOverflow(t *testing.T) {
+func TestMoshiStatusRowsScrollWithProviders(t *testing.T) {
 	m := newTestModel()
 	for index := range 12 {
 		m.cfg.Providers = append(m.cfg.Providers, config.Provider{Name: fmt.Sprintf("extra-%d", index), Enabled: true})
@@ -88,9 +88,11 @@ func TestMoshiStatusRowsRemainVisibleWhenProvidersOverflow(t *testing.T) {
 		CheckedAt: time.Now(),
 		Daemon:    moshiDaemonProbe{Installed: true, Running: true, Gateway: true, Version: "0.3.13"},
 	}
+	m.width, m.height = 60, 18
+	m.scroll[panelStatus] = 1 << 20
 	got := ansi.Strip(m.renderStatusPane(60, 8, false))
 	if !strings.Contains(got, "Moshi daemon") {
-		t.Fatalf("provider overflow hid Moshi status:\n%s", got)
+		t.Fatalf("scrolling to bottom did not reveal Moshi status:\n%s", got)
 	}
 }
 
@@ -107,7 +109,7 @@ func TestOlderMoshiRefreshCannotReplaceNewerState(t *testing.T) {
 	}
 }
 
-func TestMoshiReservedRowsParticipateInStatusViewport(t *testing.T) {
+func TestMoshiRowsParticipateInStatusViewport(t *testing.T) {
 	m := newTestModel()
 	for index := range 12 {
 		m.cfg.Providers = append(m.cfg.Providers, config.Provider{Name: fmt.Sprintf("extra-%d", index), Enabled: true})
@@ -120,9 +122,10 @@ func TestMoshiReservedRowsParticipateInStatusViewport(t *testing.T) {
 		Pairing:   moshiPairingStatus{Hooks: []moshiHookStatus{{Target: "omp", Status: "stale"}}},
 	}
 	visible := m.selectableViewportHeight(panelStatus)
-	wantMax := len(m.sortedProviders()) - visible
+	total := len(m.sortedProviders()) + len(m.moshiDashboardLines(m.paneContentWidthFor(panelStatus)))
+	wantMax := max(0, total-visible)
 	if got := m.maxScroll(panelStatus); got != wantMax {
-		t.Fatalf("status maxScroll = %d, want %d with Moshi reservation", got, wantMax)
+		t.Fatalf("status maxScroll = %d, want %d including Moshi rows", got, wantMax)
 	}
 	for range len(m.sortedProviders()) {
 		m.moveSelection(1)

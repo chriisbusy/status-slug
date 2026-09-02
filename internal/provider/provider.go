@@ -202,8 +202,85 @@ func (adapter ompAdapter) ProbeModel(ctx context.Context, doer *check.Doer, p co
 	return result
 }
 
-func (ompAdapter) FetchUsage(context.Context, *check.Doer, config.Provider, string) (*UsageResult, error) {
-	return nil, fmt.Errorf("OMP usage is not exposed by the model catalogue")
+type ompUsageEnvelope struct {
+	Reports []struct {
+		Provider string `json:"provider"`
+		Limits   []struct {
+			Scope struct {
+				Provider string `json:"provider"`
+				WindowID string `json:"windowId"`
+			} `json:"scope"`
+			Window struct {
+				ResetAt int64 `json:"resetsAt"`
+			} `json:"window"`
+			Amount struct {
+				Used         float64 `json:"used"`
+				Limit        float64 `json:"limit"`
+				UsedFraction float64 `json:"usedFraction"`
+				Unit         string  `json:"unit"`
+			} `json:"amount"`
+		} `json:"limits"`
+	} `json:"reports"`
+}
+
+var ompUsageCache struct {
+	sync.Mutex
+	at   time.Time
+	data []byte
+	err  error
+}
+
+func loadOMPUsage(ctx context.Context) ([]byte, error) {
+	ompUsageCache.Lock()
+	defer ompUsageCache.Unlock()
+	if time.Since(ompUsageCache.at) < 30*time.Second && (ompUsageCache.data != nil || ompUsageCache.err != nil) {
+		return ompUsageCache.data, ompUsageCache.err
+	}
+	ompUsageCache.data, ompUsageCache.err = exec.CommandContext(ctx, "omp", "usage", "--json").Output()
+	ompUsageCache.at = time.Now()
+	return ompUsageCache.data, ompUsageCache.err
+}
+
+func parseOMPUsage(data []byte, providerName, windowID string) (*UsageResult, error) {
+	var envelope ompUsageEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, err
+	}
+	var best *UsageResult
+	for _, report := range envelope.Reports {
+		if report.Provider != providerName {
+			continue
+		}
+		for _, limit := range report.Limits {
+			if limit.Scope.WindowID != windowID {
+				continue
+			}
+			used, capValue, unit := limit.Amount.Used, limit.Amount.Limit, limit.Amount.Unit
+			if capValue <= 0 && limit.Amount.UsedFraction >= 0 {
+				used, capValue, unit = limit.Amount.UsedFraction*100, 100, "percent"
+			}
+			candidate := &UsageResult{Value: used, Cap: capValue, Unit: unit, FetchedAt: time.Now()}
+			if best == nil || candidate.Value > best.Value {
+				best = candidate
+			}
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf("OMP usage %s/%s unavailable", providerName, windowID)
+	}
+	return best, nil
+}
+
+func (ompAdapter) FetchUsage(ctx context.Context, _ *check.Doer, p config.Provider, autoID string) (*UsageResult, error) {
+	parts := strings.Split(autoID, ":")
+	if len(parts) != 3 || parts[0] != "omp" {
+		return nil, fmt.Errorf("unknown OMP usage adapter %q", autoID)
+	}
+	data, err := loadOMPUsage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return parseOMPUsage(data, parts[1], parts[2])
 }
 
 // --- openai-compatible ---

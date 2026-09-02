@@ -178,13 +178,17 @@ func (m model) maxScroll(panel panelID) int {
 	var total int
 	switch panel {
 	case panelStatus:
-		total = len(m.sortedProviders())
+		total = len(m.sortedProviders()) + len(m.moshiDashboardLines(m.paneContentWidthFor(panelStatus)))
 	case panelFavourites:
 		total = len(m.favouriteList())
 	case panelUsage:
 		total = m.usageLineCount()
 	case panelStats:
 		total = len(m.statsRows())
+		if m.statsGraphMode(m.paneContentWidthFor(panelStats)) {
+			visible := max(1, (m.paneContentHeightFor(panelStats)-1)/2)
+			return max(0, total-visible)
+		}
 	}
 	return max(0, total-m.selectableViewportHeight(panel))
 }

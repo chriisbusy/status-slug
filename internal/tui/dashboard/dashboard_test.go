@@ -227,7 +227,7 @@ func TestRenderStatsPaneWithoutChecksShowsUnknownRows(t *testing.T) {
 	m := newTestModel()
 	m.st = state.New()
 	got := ansi.Strip(m.renderStatsPane(60, 10, false))
-	for _, want := range []string{"program", "OKProv", "mock-alpha"} {
+	for _, want := range []string{"provider/model", "OKProv", "mock-alpha"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stats pane missing configured unknown row %q: %q", want, got)
 		}
@@ -329,7 +329,7 @@ func TestStatsColumnsKeepProcessGrammarAtNarrowWidth(t *testing.T) {
 	for _, key := range keys {
 		present[key] = true
 	}
-	for _, want := range []string{"name", "latency", "history", "p95", "status"} {
+	for _, want := range []string{"name", "p95", "age", "status"} {
 		if !present[want] {
 			t.Errorf("stats column %q missing; keys=%v", want, keys)
 		}
@@ -339,7 +339,7 @@ func TestStatsColumnsKeepProcessGrammarAtNarrowWidth(t *testing.T) {
 func TestStatsPaneCompactRenderShowsProcessColumns(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderStatsPane(38, 10, false))
-	for _, want := range []string{"program", "latency", "graph", "p95", "OKProv"} {
+	for _, want := range []string{"provider/model", "p95", "ok%", "chk", "OKProv"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("compact stats pane missing %q in:\n%s", want, got)
 		}
@@ -1095,11 +1095,11 @@ func TestSpaceCyclesSelectedMenuValue(t *testing.T) {
 func TestAgeColumnsRenderCompleteRelativeAge(t *testing.T) {
 	m := newTestModel()
 	columns, keys := statsColumnsForWidth(90)
-	for _, age := range []string{"1m ago", "just now"} {
-		row := statsRow{name: "provider", provider: "provider", kind: "provider", status: "ok", age: age}
+	for _, tc := range []struct{ raw, displayed string }{{"1m ago", "1m"}, {"just now", "just now"}} {
+		row := statsRow{name: "provider", provider: "provider", kind: "provider", status: "ok", age: tc.raw}
 		got := ansi.Strip(m.renderStatsRow(row, 1, columns, keys, 90))
-		if !strings.Contains(got, age) {
-			t.Fatalf("age %q clipped: %q", age, got)
+		if !strings.Contains(got, tc.displayed) || strings.Contains(got, " ago") {
+			t.Fatalf("age %q rendered incorrectly: %q", tc.raw, got)
 		}
 	}
 }
@@ -1150,12 +1150,13 @@ func TestSettingsRendersAllProbingControls(t *testing.T) {
 	}
 }
 
-func TestStatsDetailPreservesCompleteAge(t *testing.T) {
-	row := statsRow{name: "provider", status: "ok", age: "just now", checks: 2, okPct: 100, p95: 42}
+func TestStatsSelectedDetailsPreserveCompleteAge(t *testing.T) {
+	m := newTestModel()
+	row := statsRow{name: "provider", provider: "provider", status: "ok", age: "just now", checks: 2, okPct: 100, p95: 42}
 	for _, width := range []int{45, 80, 100} {
-		got := statsDetailLine(row, width)
-		if ansi.StringWidth(got) != width || !strings.Contains(got, "just now") {
-			t.Fatalf("width %d detail clipped: %q", width, got)
+		got := ansi.Strip(strings.Join(m.statsSelectedDetails(row, width), "\n"))
+		if !strings.Contains(got, "just now") || !strings.Contains(got, "selected  provider · provider") {
+			t.Fatalf("width %d selected detail clipped: %q", width, got)
 		}
 	}
 }
@@ -1181,5 +1182,50 @@ func TestUsageWithoutMetersShowsRealProbeGaugeNotImportNote(t *testing.T) {
 	}
 	if strings.Contains(got, "configured from OMP") {
 		t.Fatalf("machine provenance leaked into usage:\n%s", got)
+	}
+}
+
+func TestOMPProvidersReceivePlanBudgetMeters(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers = []config.Provider{{Name: "codex", Kind: "omp", BaseURL: "openai-codex"}}
+	ensureOMPUsageMeters(&cfg)
+	if len(cfg.Providers[0].Meters) != 2 {
+		t.Fatalf("OMP meters = %+v", cfg.Providers[0].Meters)
+	}
+	for _, want := range []string{"omp:openai-codex:5h", "omp:openai-codex:7d"} {
+		found := false
+		for _, meter := range cfg.Providers[0].Meters {
+			found = found || meter.Auto == want
+		}
+		if !found {
+			t.Fatalf("missing %s", want)
+		}
+	}
+}
+
+func TestDashboardSaveRederivesOMPUsageMeters(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	disk := config.Default()
+	disk.Providers = []config.Provider{{Name: "codex", Kind: "omp", BaseURL: "openai-codex", Enabled: true}}
+	if err := config.Save(disk); err != nil {
+		t.Fatal(err)
+	}
+	m := New(disk, state.New())
+	if len(m.cfg.Providers[0].Meters) != 2 {
+		t.Fatalf("initial derived meters = %+v", m.cfg.Providers[0].Meters)
+	}
+	m.cfg.Settings.StatsMode = "table"
+	if err := m.saveDashboardConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.cfg.Providers[0].Meters) != 2 {
+		t.Fatalf("settings save dropped derived meters: %+v", m.cfg.Providers[0].Meters)
+	}
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Providers[0].Meters) != 0 {
+		t.Fatalf("derived meters should not persist to TOML: %+v", reloaded.Providers[0].Meters)
 	}
 }

@@ -921,6 +921,8 @@ func (m model) newSettingsOverlay() overlayState {
 
 	glyphF := widgets.NewSelect(m.palette, "graph style", []string{"tty", "block", "braille"})
 	selectIdx(glyphF, []string{"tty", "block", "braille"}, s.GraphStyle)
+	statsModeF := widgets.NewSelect(m.palette, "stats display", []string{"auto", "table", "graph"})
+	selectIdx(statsModeF, []string{"auto", "table", "graph"}, s.StatsMode)
 
 	bgF := widgets.NewConfirm(m.palette, "paint theme background", s.ThemeBackground)
 
@@ -968,7 +970,7 @@ func (m model) newSettingsOverlay() overlayState {
 
 	fields := []widgets.Field{
 		widgets.NewNote(m.palette, "appearance", "theme, continuous pane splits, chrome"),
-		themeF, viewF, topRatioF, leftRatioF, usageRatioF, borderF, glyphF, bgF,
+		themeF, viewF, topRatioF, leftRatioF, usageRatioF, borderF, glyphF, statsModeF, bgF,
 		widgets.NewNote(m.palette, "probing", "timeouts, refresh, key storage"),
 		timeoutF, refreshF, modeF, histF, keysF,
 		widgets.NewNote(m.palette, "integrations", "press g for Moshi setup/status; loopback API setting below"),
@@ -984,7 +986,7 @@ func (m model) newSettingsOverlay() overlayState {
 		fields: map[string]widgets.Field{
 			"theme": themeF, "view": viewF, "topRatio": topRatioF,
 			"leftRatio": leftRatioF, "usageRatio": usageRatioF,
-			"border": borderF, "glyphs": glyphF, "themeBackground": bgF,
+			"border": borderF, "glyphs": glyphF, "statsMode": statsModeF, "themeBackground": bgF,
 			"timeout": timeoutF, "refresh": refreshF, "mode": modeF, "history": histF,
 			"keys": keysF, "serveListen": serveF, "nerd": nerdF, "confirmQuit": quitF,
 			"checkOnLaunch": launchF, "alertBell": bellF,
@@ -1066,6 +1068,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		s.Theme = get("theme")
 		s.BorderStyle = get("border")
 		s.GraphStyle = get("glyphs")
+		s.StatsMode = get("statsMode")
 		s.ProbeTimeout, _ = strconv.Atoi(get("timeout"))
 		s.AutoRefresh, _ = strconv.Atoi(map[string]string{"off": "0", "30s": "30", "60s": "60", "300s": "300"}[get("refresh")])
 		s.ProbeMode = get("mode")
