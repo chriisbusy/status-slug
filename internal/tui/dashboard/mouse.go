@@ -68,7 +68,7 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		contentW = paneW - 3 // borders plus the inset scrollbar column.
 	}
 	// Stats header click cycles sort on the rendered process-table column.
-	if p == panelStats && localRow == 0 {
+	if p == panelStats && localRow == 0 && !m.statsGraphMode(contentW) {
 		columns, keys := statsColumnsForWidth(contentW)
 		column := statsColumnAt(x-paneX-1, columns)
 		if column >= 0 && column < len(keys) {
@@ -76,15 +76,25 @@ func (m model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if localRow >= 1 || (p != panelStats && localRow >= 0) {
-		row := localRow
-		if p == panelStats {
-			row = localRow - 1
+	if p == panelStatus && localRow >= 0 {
+		absolute := m.scroll[panelStatus] + localRow
+		moshiRows := len(m.moshiDashboardLines(contentW))
+		if absolute < moshiRows {
+			m.ov = m.newIntegrationsOverlay()
+			return m, moshiStatusCmd()
 		}
-		m.sel[p] = m.scroll[p] + row
-		if max := m.maxSelection(p); m.sel[p] > max && max >= 0 {
-			m.sel[p] = max
+		m.sel[panelStatus] = min(max(0, absolute-moshiRows), m.maxSelection(panelStatus))
+		return m, nil
+	}
+
+	if p == panelStats && localRow >= 1 {
+		row := localRow - 1
+		if m.statsGraphMode(contentW) {
+			row /= 2
 		}
+		m.sel[p] = min(max(0, m.scroll[p]+row), m.maxSelection(p))
+	} else if p != panelStatus && localRow >= 0 {
+		m.sel[p] = min(max(0, m.scroll[p]+localRow), m.maxSelection(p))
 	}
 	// Heading clicks: top border row of the pane opens the pane menu.
 	if localRow == -1 {

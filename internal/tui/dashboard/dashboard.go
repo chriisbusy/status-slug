@@ -712,11 +712,19 @@ func (m *model) moveSelection(delta int) {
 		m.sel[m.focused] = maxIndex
 	}
 	visible := m.selectableViewportHeight(m.focused)
-	if m.sel[m.focused] < m.scroll[m.focused] {
-		m.scroll[m.focused] = m.sel[m.focused]
+	position := m.sel[m.focused]
+	if m.focused == panelStatus {
+		position += len(m.moshiDashboardLines(m.paneContentWidthFor(panelStatus)))
 	}
-	if m.sel[m.focused] >= m.scroll[m.focused]+visible {
-		m.scroll[m.focused] = m.sel[m.focused] - visible + 1
+	if m.focused == panelStatus && m.sel[panelStatus] == 0 {
+		m.scroll[panelStatus] = 0
+		return
+	}
+	if position < m.scroll[m.focused] {
+		m.scroll[m.focused] = position
+	}
+	if position >= m.scroll[m.focused]+visible {
+		m.scroll[m.focused] = position - visible + 1
 	}
 }
 

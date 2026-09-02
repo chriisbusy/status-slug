@@ -191,11 +191,11 @@ func (m model) renderNarrowStatus(providers []*config.Provider, w, h int) string
 }
 
 func (m model) statusViewportLines(providers []*config.Provider, width int) []string {
-	lines := make([]string, 0, len(providers)+len(m.moshiDashboardLines(width)))
+	lines := append([]string(nil), m.moshiDashboardLines(width)...)
 	for index, provider := range providers {
 		lines = append(lines, m.statusGaugeLine(provider, width, index == m.sel[panelStatus]))
 	}
-	return append(lines, m.moshiDashboardLines(width)...)
+	return lines
 }
 
 func groupedProviders(providers []*config.Provider) []*config.Provider {

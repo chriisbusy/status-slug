@@ -150,21 +150,27 @@ func (m model) moshiDashboardLines(width int) []string {
 	} else if status.Daemon.Running || status.Pairing.Paired {
 		daemonState = "account"
 	}
-	lines := []string{fitCells(m.glyphFor(daemonState)+" "+title.Render("Moshi daemon")+" "+muted.Render("v"+status.Daemon.Version+" · "+age), width)}
+	lines := []string{fitCells(m.glyphFor(daemonState)+" "+title.Render("Moshi daemon")+" "+muted.Render("v"+status.Daemon.Version+" · "+displayAge(age)), width)}
+	stale, broken, current := 0, 0, 0
 	for _, hook := range status.Pairing.Hooks {
-		hookState := "unknown"
 		switch hook.Status {
 		case "installed", "current":
-			hookState = "ok"
+			current++
 		case "stale":
-			hookState = "account"
+			stale++
 		case "broken":
-			hookState = "down"
-		default:
-			continue
+			broken++
 		}
-		lines = append(lines, fitCells(m.glyphFor(hookState)+" "+title.Render("Moshi "+hook.Target+" hook")+" "+muted.Render(strings.ReplaceAll(hook.Status, "_", " ")), width))
 	}
+	hookState := "ok"
+	if broken > 0 {
+		hookState = "down"
+	} else if stale > 0 {
+		hookState = "account"
+	}
+	lines = append(lines, fitCells(
+		m.glyphFor(hookState)+" "+title.Render("Moshi hooks")+" "+
+			muted.Render(fmt.Sprintf("%d current · %d stale · %d broken · g details", current, stale, broken)), width))
 	return lines
 }
 

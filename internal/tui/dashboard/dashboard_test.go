@@ -497,6 +497,7 @@ func TestCompactStatsHeaderClickSortsRenderedColumn(t *testing.T) {
 	m.focused = panelStats
 	m.width = 51
 	m.height = 20
+	m.cfg.Settings.StatsMode = "table"
 	contentWidth := m.width - 3
 	columns, keys := statsColumnsForWidth(contentWidth)
 	p95Start := 0

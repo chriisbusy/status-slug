@@ -60,7 +60,7 @@ func TestMoshiDashboardLinesShowLiveStatesAndFreshness(t *testing.T) {
 		}},
 	}
 	got := ansi.Strip(strings.Join(m.moshiDashboardLines(60), "\n"))
-	for _, want := range []string{"Moshi daemon", "0.3.13", "Moshi claude hook", "stale", "Moshi codex hook", "installed", "just"} {
+	for _, want := range []string{"Moshi daemon", "0.3.13", "Moshi hooks", "1 current", "1 stale", "just now"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("dashboard status missing %q:\n%s", want, got)
 		}
@@ -79,7 +79,7 @@ func TestMoshiDashboardLinesDegradeHonestly(t *testing.T) {
 	}
 }
 
-func TestMoshiStatusRowsScrollWithProviders(t *testing.T) {
+func TestMoshiStatusRowsStartVisibleAndScrollAway(t *testing.T) {
 	m := newTestModel()
 	for index := range 12 {
 		m.cfg.Providers = append(m.cfg.Providers, config.Provider{Name: fmt.Sprintf("extra-%d", index), Enabled: true})
@@ -89,10 +89,12 @@ func TestMoshiStatusRowsScrollWithProviders(t *testing.T) {
 		Daemon:    moshiDaemonProbe{Installed: true, Running: true, Gateway: true, Version: "0.3.13"},
 	}
 	m.width, m.height = 60, 18
+	if got := ansi.Strip(m.renderStatusPane(60, 8, false)); !strings.Contains(got, "Moshi daemon") {
+		t.Fatalf("initial status hid Moshi summary:\n%s", got)
+	}
 	m.scroll[panelStatus] = 1 << 20
-	got := ansi.Strip(m.renderStatusPane(60, 8, false))
-	if !strings.Contains(got, "Moshi daemon") {
-		t.Fatalf("scrolling to bottom did not reveal Moshi status:\n%s", got)
+	if got := ansi.Strip(m.renderStatusPane(60, 8, false)); strings.Contains(got, "Moshi daemon") {
+		t.Fatalf("Moshi summary remained pinned after scroll:\n%s", got)
 	}
 }
 
@@ -145,5 +147,21 @@ func TestMoshiStatusVisibleWithoutProviders(t *testing.T) {
 	got := ansi.Strip(m.renderStatusPane(60, 8, false))
 	if !strings.Contains(got, "Moshi daemon") {
 		t.Fatalf("empty-provider status lost independent Moshi state:\n%s", got)
+	}
+}
+
+func TestKeyboardReturningToFirstProviderRestoresMoshiPrefix(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 60, 18
+	m.focused = panelStatus
+	m.moshiStatus = &moshiLocalStatus{CheckedAt: time.Now(), Daemon: moshiDaemonProbe{Running: true, Gateway: true}}
+	for range len(m.sortedProviders()) {
+		m.moveSelection(1)
+	}
+	for range len(m.sortedProviders()) {
+		m.moveSelection(-1)
+	}
+	if m.sel[panelStatus] != 0 || m.scroll[panelStatus] != 0 {
+		t.Fatalf("first provider did not restore Moshi prefix: sel=%d scroll=%d", m.sel[panelStatus], m.scroll[panelStatus])
 	}
 }
