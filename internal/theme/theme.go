@@ -69,7 +69,7 @@ type Warning struct {
 // sstop is the default btop-like terminal theme. ANSI slots deliberately let
 // the terminal own the exact colors, matching btop's force-TTY behavior.
 var builtinSstop = Palette{
-	Bg:             "#111217",
+	Bg:             "#21222B",
 	Fg:             "#F8F8F3",
 	Muted:          "#F8F8F3",
 	Title:          "#F8F8F3",
@@ -77,7 +77,7 @@ var builtinSstop = Palette{
 	BoxBorder:      "#6572A0",
 	BoxBorderFocus: "#E15C4F",
 	OK:             "#85F789",
-	Warn:           "#FFFF00",
+	Warn:           "#F3FA9A",
 	Err:            "#C87776",
 	Unknown:        "#87958C",
 	BarFill:        "#85F789",
@@ -90,7 +90,7 @@ var builtinSstop = Palette{
 	SelectedFg:     "#FFFFFF",
 	KeyHint:        "#F8F8F3",
 	PaneStatus:     "#85F789",
-	PaneUsage:      "#FFFF00",
+	PaneUsage:      "#F3FA9A",
 	PaneFavourites: "#EE84C7",
 	PaneStats:      "#C87776",
 }
