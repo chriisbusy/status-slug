@@ -1155,7 +1155,7 @@ func TestStatsSelectedDetailsPreserveCompleteAge(t *testing.T) {
 	m := newTestModel()
 	row := statsRow{name: "provider", provider: "provider", status: "ok", age: "just now", checks: 2, okPct: 100, p95: 42}
 	for _, width := range []int{45, 80, 100} {
-		got := ansi.Strip(strings.Join(m.statsSelectedDetails(row, width), "\n"))
+		got := ansi.Strip(strings.Join(m.statsSelectedMeterDetails(row, width, 11), "\n"))
 		if !strings.Contains(got, "just now") || !strings.Contains(got, "selected  provider · provider") {
 			t.Fatalf("width %d selected detail clipped: %q", width, got)
 		}
@@ -1255,5 +1255,27 @@ func TestStatsTableDiffersFromFavourites(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("stats table still duplicates favourites with %q: %s", forbidden, joined)
 		}
+	}
+}
+
+func TestStatsTableBottomUsesBtopMeterDetails(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Settings.StatsMode = "table"
+	got := ansi.Strip(m.renderStatsPane(100, 30, false))
+	for _, want := range []string{"selected", "success", "p95 latency", "█"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stats table bottom missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStatsMeterDetailsReserveScopedErrorLine(t *testing.T) {
+	m := newTestModel()
+	providerState := m.st.Provider("AuthProv")
+	providerState.RecentErrors = []state.ErrorEntry{{Status: "account", Reason: "HTTP 403"}}
+	row := statsRow{name: "AuthProv", provider: "AuthProv", status: "account", checks: 3, okPct: 0, account: 3, p50: 120, p95: 180}
+	got := ansi.Strip(strings.Join(m.statsSelectedMeterDetails(row, 80, 8), "\n"))
+	if !strings.Contains(got, "AuthProv · account · HTTP 403") {
+		t.Fatalf("scoped error crowded out:\n%s", got)
 	}
 }

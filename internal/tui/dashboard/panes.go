@@ -989,7 +989,8 @@ func (m model) renderStatsPane(width, height int, _ bool) string {
 		}
 		header += title.Render(statsCell(label, column.Width))
 	}
-	visible := max(0, height-2)
+	detailHeight := min(11, max(7, height/3))
+	visible := max(1, height-2-detailHeight)
 	offset := min(m.scroll[panelStats], max(0, len(rows)-visible))
 	end := min(len(rows), offset+visible)
 	lines := []string{fitCells(header, contentWidth) + m.statsScrollCell(len(rows), offset, visible, 0, height)}
@@ -1002,14 +1003,12 @@ func (m model) renderStatsPane(width, height int, _ bool) string {
 		}
 		lines = append(lines, fitCells(line, contentWidth)+m.statsScrollCell(len(rows), offset, visible, index+1, height))
 	}
-	if end == len(rows) {
-		selected := min(max(0, m.sel[panelStats]), len(rows)-1)
-		for _, detail := range m.statsSelectedDetails(rows[selected], contentWidth) {
-			if len(lines) >= height-1 {
-				break
-			}
-			lines = append(lines, fitCells(detail, contentWidth)+m.statsScrollCell(len(rows), offset, visible, len(lines), height))
+	selected := min(max(0, m.sel[panelStats]), len(rows)-1)
+	for _, detail := range m.statsSelectedMeterDetails(rows[selected], contentWidth, detailHeight) {
+		if len(lines) >= height-1 {
+			break
 		}
+		lines = append(lines, fitCells(detail, contentWidth)+m.statsScrollCell(len(rows), offset, visible, len(lines), height))
 	}
 	for len(lines) < height-1 {
 		row := len(lines)
@@ -1055,38 +1054,69 @@ func (m model) renderStatsRow(row statsRow, slot int, columns []table.Column, ke
 	return fitCells(line, width)
 }
 
-func (m model) statsSelectedDetails(row statsRow, width int) []string {
+func (m model) statsSelectedMeterDetails(row statsRow, width, maxLines int) []string {
 	muted := mutedStyle(m.palette)
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
 	age := displayAge(row.age)
 	if age == "" {
 		age = "—"
 	}
+	errors := m.statsErrorsForRow(row)
 	lines := []string{
 		muted.Render(strings.Repeat("─", max(0, width))),
 		title.Render(fitCells("selected  "+row.name+" · "+row.provider, width)),
-		muted.Render(fitCells(fmt.Sprintf("status %s · age %s", row.status, age), width)),
-		muted.Render(fitCells(fmt.Sprintf("checks %d · ok %d%% · account %d · down %d", row.checks, row.okPct, row.account, row.down), width)),
-		muted.Render(fitCells(fmt.Sprintf("p50 %.0fms · p95 %.0fms · samples %d", row.p50, row.p95, len(row.history)), width)),
+		muted.Render(fitCells(fmt.Sprintf("status %s · age %s · checks %d · errors %d", row.status, age, row.checks, len(errors)), width)),
 	}
-	var errors []state.ErrorEntry
+	type metric struct {
+		label, value string
+		percent      float64
+		role         theme.Role
+	}
+	accountPercent, downPercent := 0.0, 0.0
+	if row.checks > 0 {
+		accountPercent = float64(row.account) / float64(row.checks)
+		downPercent = float64(row.down) / float64(row.checks)
+	}
+	metrics := []metric{
+		{"success", fmt.Sprintf("%d%%", row.okPct), float64(row.okPct) / 100, theme.OK},
+		{"p95 latency", fmt.Sprintf("%.0fms", row.p95), row.p95 / 600, theme.Warn},
+		{"p50 latency", fmt.Sprintf("%.0fms", row.p50), row.p50 / 600, theme.BoxBorder},
+		{"account", fmt.Sprintf("%d", row.account), accountPercent, theme.Warn},
+		{"down", fmt.Sprintf("%d", row.down), downPercent, theme.Err},
+	}
+	metricLimit := maxLines
+	if len(errors) > 0 {
+		metricLimit--
+	}
+	for _, metric := range metrics {
+		if len(lines)+2 > metricLimit {
+			break
+		}
+		label, value := title.Render(metric.label), title.Render(metric.value)
+		lines = append(lines,
+			fitCells(label+strings.Repeat(" ", max(1, width-ansi.StringWidth(label)-ansi.StringWidth(value)))+value, width),
+			m.btopMeterBar(clampUnit(metric.percent), width, metric.role),
+		)
+	}
+	if len(errors) > 0 && len(lines) < maxLines {
+		recent := errors[len(errors)-1]
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Err])).Render(
+			fitCells(row.name+" · "+recent.Status+" · "+recent.Reason, width)))
+	}
+	return lines
+}
+
+func (m model) statsErrorsForRow(row statsRow) []state.ErrorEntry {
 	if row.isFav {
 		if providerState := m.st.Providers[row.provider]; providerState != nil {
 			if modelState := providerState.Models[row.name]; modelState != nil {
-				errors = modelState.RecentErrors
+				return modelState.RecentErrors
 			}
 		}
 	} else if providerState := m.st.Providers[row.name]; providerState != nil {
-		errors = providerState.RecentErrors
+		return providerState.RecentErrors
 	}
-	if len(errors) > 0 {
-		lines = append(lines, title.Render(fmt.Sprintf("%s errors  %d", row.name, len(errors))))
-		for _, recent := range errors {
-			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Err])).Render(
-				fitCells(row.name+" · "+recent.Status+" · "+recent.Reason, width)))
-		}
-	}
-	return lines
+	return nil
 }
 
 func statsCell(value string, width int) string {
