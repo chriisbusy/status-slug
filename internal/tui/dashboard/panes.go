@@ -483,9 +483,10 @@ func (m model) renderUsagePane(w, h int, _ bool) string {
 
 // meterLines renders one real meter as value, square-cell gauge, and source.
 func (m model) meterLines(providerName string, meter config.Meter, width int, selected bool) []string {
+	meterValue := m.st.GetMeter(providerName, meter.Name)
 	value := meter.Used
 	var setAt time.Time
-	if meterValue := m.st.GetMeter(providerName, meter.Name); meterValue != nil {
+	if meterValue != nil {
 		value = meterValue.Value
 		setAt = meterValue.SetAt
 	}
@@ -496,6 +497,14 @@ func (m model) meterLines(providerName string, meter config.Meter, width int, se
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	label := providerName + " · " + meter.Name
+	if meterValue == nil && meter.Auto != "" {
+		first := fitCells(title.Render(label), width)
+		if selected && m.focused == panelUsage {
+			first = lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.SelectedFg])).
+				Background(lipgloss.Color(m.palette[theme.SelectedBg])).Bold(true).Render(first)
+		}
+		return []string{first, muted.Render(fitCells("not measured · refresh to measure", width))}
+	}
 	valueText := fmt.Sprintf("%.4g", value)
 	if meter.Cap > 0 {
 		valueText += fmt.Sprintf(" / %.4g", meter.Cap)
@@ -1159,6 +1168,9 @@ func (m model) usageLineCount() int {
 		}
 		for _, meter := range providerConfig.Meters {
 			total += 2
+			if meter.Auto != "" && m.st.GetMeter(providerConfig.Name, meter.Name) == nil {
+				continue
+			}
 			if meter.Cap > 0 {
 				total++
 			}

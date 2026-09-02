@@ -436,6 +436,30 @@ func (m model) cycleMainValue(action string, direction int) model {
 
 func (m model) menuKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
+	case "m":
+		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
+		return m, nil
+	case "s":
+		m.ov = m.newMenuOverlay(panelStatus)
+		return m, nil
+	case "u":
+		m.ov = m.newMenuOverlay(panelUsage)
+		return m, nil
+	case "f":
+		m.ov = m.newMenuOverlay(panelFavourites)
+		return m, nil
+	case "t":
+		m.ov = m.newMenuOverlay(panelStats)
+		return m, nil
+	case "g":
+		m.ov = m.newIntegrationsOverlay()
+		return m, moshiStatusCmd()
+	case "o":
+		m.ov = m.newSettingsOverlay()
+		if m.ov.kind == overlayForm {
+			return m, dashBlinkTick()
+		}
+		return m, nil
 	case "esc", "q":
 		_ = m.saveDashboardConfig()
 		m.savePrefs()
@@ -1399,6 +1423,24 @@ func (m model) menuWidths() (left, right int) {
 	return left, max(10, available-left-1)
 }
 
+func (m model) menuCategoryHeader(width int) string {
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	normal := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
+	word := func(before, key, after string) string {
+		return normal.Render(before) + action.Render(key) + normal.Render(after)
+	}
+	categories := []string{
+		word("", "m", "enu"),
+		word("", "s", "tatus"),
+		word("", "u", "sage"),
+		word("", "f", "avourites"),
+		word("s", "t", "ats"),
+		word("inte", "g", "rations"),
+		word("", "o", "ptions"),
+	}
+	return fitCells(strings.Join(categories, "  "), width)
+}
+
 func (m model) renderOverlay(base string) string {
 	var content string
 	switch m.ov.kind {
@@ -1420,7 +1462,7 @@ func (m model) renderOverlay(base string) string {
 			Bold(true)
 		divider := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.BoxBorder])).Render("│")
 		var builder strings.Builder
-		builder.WriteString(normal.Render(fitCells("general   status   usage   favourites   stats   integrations", leftWidth+rightWidth+1)))
+		builder.WriteString(m.menuCategoryHeader(leftWidth + rightWidth + 1))
 		builder.WriteString("\n" + muted.Render(strings.Repeat("─", leftWidth)) + divider + muted.Render(strings.Repeat("─", rightWidth)) + "\n")
 		start, end := m.menuWindow()
 		for index := start; index < end; index++ {

@@ -449,7 +449,7 @@ func TestHeaderKeepsExactSSLUGWordmark(t *testing.T) {
 func TestFooterUsesGlobalActionsOnly(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderFooter())
-	for _, want := range []string{"tab focus", "m menu", "p views", "? help", "q quit"} {
+	for _, want := range []string{"tab focus", "menu", "preset", "shift+prev preset", "? help", "q quit"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer missing global action %q: %q", want, got)
 		}
@@ -1277,5 +1277,73 @@ func TestStatsMeterDetailsReserveScopedErrorLine(t *testing.T) {
 	got := ansi.Strip(strings.Join(m.statsSelectedMeterDetails(row, 80, 8), "\n"))
 	if !strings.Contains(got, "AuthProv · account · HTTP 403") {
 		t.Fatalf("scoped error crowded out:\n%s", got)
+	}
+}
+
+func TestFooterUsesRequestedPresetLabels(t *testing.T) {
+	m := newTestModel()
+	got := ansi.Strip(m.renderFooter())
+	for _, want := range []string{"menu", "preset", "shift+prev preset"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("footer missing %q: %q", want, got)
+		}
+	}
+	for _, unwanted := range []string{"m menu", "p views", "shift+p previous"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("footer retained %q: %q", unwanted, got)
+		}
+	}
+}
+
+func TestMenuCategoryShortcutsRouteWithinOnePopup(t *testing.T) {
+	cases := []struct {
+		key   string
+		title string
+		kind  overlayKind
+	}{
+		{"m", "menu", overlayMenu},
+		{"s", "status menu", overlayMenu},
+		{"u", "usage menu", overlayMenu},
+		{"f", "favourites menu", overlayMenu},
+		{"t", "stats menu", overlayMenu},
+		{"g", "integrations", overlayViewport},
+		{"o", "settings", overlayForm},
+	}
+	for _, tc := range cases {
+		m := newTestModel()
+		m.ov = overlayState{kind: overlayMenu, title: "menu", menuItems: m.mainMenuItems()}
+		next, _ := m.menuKey(tc.key)
+		got := next.(model)
+		if got.ov.kind != tc.kind || got.ov.title != tc.title {
+			t.Fatalf("key %q routed to kind=%v title=%q, want kind=%v title=%q", tc.key, got.ov.kind, got.ov.title, tc.kind, tc.title)
+		}
+	}
+}
+
+func TestMenuCategoryHeaderEmbedsActionKeys(t *testing.T) {
+	m := newTestModel()
+	got := ansi.Strip(m.menuCategoryHeader(100))
+	for _, want := range []string{"menu", "status", "usage", "favourites", "stats", "integrations", "options"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("category header missing %q: %q", want, got)
+		}
+	}
+	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
+	for _, key := range []string{"m", "s", "u", "f", "t", "g", "o"} {
+		if !strings.Contains(m.menuCategoryHeader(100), action.Render(key)) {
+			t.Fatalf("category key %q is not highlighted", key)
+		}
+	}
+}
+
+func TestAutomaticMeterWithoutSampleIsNotMeasured(t *testing.T) {
+	m := newTestModel()
+	meter := config.Meter{Name: "7 day budget", Unit: "percent", Kind: "auto", Auto: "omp:openai-codex:7d", Cap: 100}
+	got := ansi.Strip(strings.Join(m.meterLines("openai-codex", meter, 70, false), "\n"))
+	if !strings.Contains(got, "not measured · refresh to measure") {
+		t.Fatalf("absent auto meter missing exact empty-state copy:\n%s", got)
+	}
+	if strings.Contains(got, "0 / 100") || strings.Contains(got, "0%") {
+		t.Fatalf("absent auto meter fabricated zero:\n%s", got)
 	}
 }

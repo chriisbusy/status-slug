@@ -1459,15 +1459,16 @@ func (dashKeyMap) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "check")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "check one")),
 		key.NewBinding(key.WithKeys("s/u/f/t"), key.WithHelp("s/u/f/t", "menus")),
-		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "views")),
+		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "reset")),
+		key.NewBinding(key.WithKeys("P"), key.WithHelp("shift+p", "rev preset")),
 		key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "theme")),
 		key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
 		key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "integrations")),
 		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
-		key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "menu")),
+		key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "enu")),
 		key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inspect")),
 		key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
-		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "edit")),
+		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
 		key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "zoom")),
 		key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
@@ -1483,19 +1484,19 @@ func (m model) renderFooter() string {
 			m.width-1)
 	}
 	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
-	item := func(key, desc string) string {
-		return accent.Render(key) + muted.Render(desc)
-	}
+	plain := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
+	menu := accent.Render("m") + plain.Render("enu")
+	preset := accent.Render("p") + plain.Render("reset")
+	previousPreset := accent.Render("shift+p") + plain.Render("rev preset")
 	primary := []string{
-		item("tab", " focus"),
-		item("m", " menu"),
-		item("p", " views"),
-		item("shift+p", " previous"),
-		item("?", " help"),
-		item("q", " quit"),
+		accent.Render("tab") + plain.Render(" focus"),
+		menu,
+		preset,
+		previousPreset,
+		accent.Render("?") + plain.Render(" help"),
+		accent.Render("q") + plain.Render(" quit"),
 	}
-	return " " + fitActionLine(primary, m.width-1, muted.Render(" · "))
+	return " " + fitActionLine(primary, m.width-1, plain.Render(" · "))
 }
 
 func fitActionLine(parts []string, width int, sep string) string {
