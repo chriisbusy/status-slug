@@ -1437,9 +1437,10 @@ func (m model) headerRows() ([]string, []hitRegion) {
 		return fitCells(art+left+strings.Repeat(" ", gap)+right, m.width)
 	}
 
+	product := title.Render(" · status slug")
 	dateTime := title.Render(m.headerDateTime())
 	rows := []string{
-		place(artLines[0], "", dateTime),
+		place(artLines[0], product, dateTime),
 		place(artLines[1], "", metrics),
 	}
 	return rows, nil
@@ -1609,11 +1610,7 @@ func (m model) renderPane(p panelID, w, h int) string {
 		Render(strings.Join(contentLines, "\n"))
 	lines := strings.Split(box, "\n")
 	if len(lines) > 0 {
-		centerTitle := ""
-		if p == panelStatus {
-			centerTitle = "status slug"
-		}
-		lines[0] = buildTitleBorder(w, title, centerTitle, borderColor, bs)
+		lines[0] = buildTitleBorder(w, title, borderColor, bs)
 		if hint := m.paneBottomHint(p); hint != "" && len(lines) > 1 {
 			lines[min(len(lines)-1, h-1)] = buildBottomBorder(w, hint, borderColor, bs)
 		}
@@ -1718,31 +1715,20 @@ func (m model) meterCounts() (total, auto, fav int) {
 // buildTitleBorder constructs the top border line as separately-styled
 // segments: border in border color, title arriving pre-styled (bound key in
 // accent per btop convention).
-func buildTitleBorder(w int, styledTitle, centerTitle, color string, bs lipgloss.Border) string {
+func buildTitleBorder(w int, styledTitle, color string, bs lipgloss.Border) string {
 	if w < 4 {
 		return ""
 	}
 	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
 	titleTxt := " " + styledTitle + " "
-	fill := w - 2 - ansi.StringWidth(titleTxt) - 1
+	fill := w - 2 - ansi.StringWidth(titleTxt) - 1 // corners + leading dash
 	if fill < 0 {
 		titleTxt = ansi.Truncate(titleTxt, w-3, "")
 		fill = 0
 	}
-	left := borderStyle.Render(bs.TopLeft+bs.Top) + titleTxt
-	center := borderStyle.Render(strings.Repeat(bs.Top, fill) + bs.TopRight)
-	if centerTitle == "" {
-		return left + center
-	}
-	centerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
-	plainCenter := " " + centerTitle + " "
-	leftWidth := ansi.StringWidth(left)
-	start := max(leftWidth, (w-ansi.StringWidth(plainCenter))/2)
-	if start+ansi.StringWidth(plainCenter)+1 > w {
-		start = max(leftWidth, w-ansi.StringWidth(plainCenter)-1)
-	}
-	return fitCells(left+strings.Repeat(" ", max(0, start-leftWidth))+centerStyle.Render(plainCenter)+
-		borderStyle.Render(strings.Repeat(bs.Top, max(0, w-start-ansi.StringWidth(plainCenter)-1))+bs.TopRight), w)
+	return borderStyle.Render(bs.TopLeft+bs.Top) +
+		titleTxt +
+		borderStyle.Render(strings.Repeat(bs.Top, fill)+bs.TopRight)
 }
 
 func buildBottomBorder(width int, styledHint, color string, border lipgloss.Border) string {
