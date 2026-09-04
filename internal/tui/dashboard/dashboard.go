@@ -90,6 +90,7 @@ type autoUsageMsg struct {
 	updates []provider.MeterUpdate
 }
 type tickMsg time.Time
+type clockTickMsg time.Time
 type footerClearMsg struct{ seq int }
 type wheelRenderMsg struct{}
 
@@ -254,6 +255,14 @@ func New(cfg config.Config, st *state.File) model {
 		settingWarnings = append(settingWarnings, fmt.Sprintf("unknown stats mode %q — using auto", cfg.Settings.StatsMode))
 		cfg.Settings.StatsMode = "auto"
 	}
+	switch cfg.Settings.ClockLayout {
+	case "", "date_time":
+		cfg.Settings.ClockLayout = "date_time"
+	case "time_date", "time", "date":
+	default:
+		settingWarnings = append(settingWarnings, fmt.Sprintf("unknown clock layout %q — using date_time", cfg.Settings.ClockLayout))
+		cfg.Settings.ClockLayout = "date_time"
+	}
 	ensureOMPUsageMeters(&cfg)
 	palette, warns := theme.LoadFromSettings(cfg.Settings)
 	m := model{
@@ -407,6 +416,7 @@ func (m model) Init() tea.Cmd {
 	if m.cfg.Settings.CheckOnLaunch {
 		cmds = append(cmds, func() tea.Msg { return checkNowMsg{} })
 	}
+	cmds = append(cmds, m.clockTickCmd())
 	if m.cfg.Settings.AutoRefresh > 0 {
 		cmds = append(cmds, m.tickCmd())
 	}
@@ -416,6 +426,10 @@ func (m model) Init() tea.Cmd {
 func (m model) tickCmd() tea.Cmd {
 	d := time.Duration(m.cfg.Settings.AutoRefresh) * time.Second
 	return tea.Tick(d, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+func (m model) clockTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return clockTickMsg(t) })
 }
 
 // resizeApplyMsg fires after a resize debounce window; the latest seq wins.
@@ -520,6 +534,9 @@ func (m model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		cmd := m.startCheckAll()
 		return m, cmd
 
+	case clockTickMsg:
+		return m, m.clockTickCmd()
+
 	case tickMsg:
 		if m.cfg.Settings.AutoRefresh > 0 && !m.checking {
 			cmd := m.startCheckAll()
@@ -556,7 +573,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	key := msg.String()
 	switch key {
-	case "q", "ctrl+c":
+	case "Q", "ctrl+c":
 		if m.cfg.Settings.ConfirmQuit || m.checking {
 			m.ov = overlayState{kind: overlayConfirm, action: "quit",
 				title: "Quit sslug?", body: "a check is in flight — quit anyway?"}
@@ -1215,6 +1232,7 @@ func (m model) render() string {
 	body := m.renderLayout()
 	footer := m.renderFooter()
 	frame := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	frame = m.paintBackground(frame)
 	if m.ov.kind != overlayNone {
 		frame = m.renderOverlay(frame)
 	}
@@ -1222,6 +1240,19 @@ func (m model) render() string {
 		frame = m.renderWizardPopup(frame)
 	}
 	return frame
+}
+
+// paintBackground applies the theme background through dashboard content when enabled.
+func (m model) paintBackground(frame string) string {
+	if !m.cfg.Settings.ThemeBackground || m.palette[theme.Bg] == "" {
+		return frame
+	}
+	style := lipgloss.NewStyle().Background(lipgloss.Color(m.palette[theme.Bg]))
+	lines := strings.Split(frame, "\n")
+	for i, line := range lines {
+		lines[i] = style.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderWizardPopup centers the wizard over the dashboard frame, btop-modal
@@ -1359,7 +1390,6 @@ func (m model) headerRows() ([]string, []hitRegion) {
 	glyphs := m.glyphs()
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Title])).Bold(true)
-	action := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
 	okStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.OK])).Bold(true)
 	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn])).Bold(true)
 	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Err])).Bold(true)
@@ -1368,17 +1398,21 @@ func (m model) headerRows() ([]string, []hitRegion) {
 	health := title.Render("fleet ") +
 		okStyle.Render(fmt.Sprintf("%s%d", glyphs.ok, ok)) + muted.Render("  ") +
 		warnStyle.Render(fmt.Sprintf("%s%d", glyphs.account, account)) + muted.Render("  ") +
-		errStyle.Render(fmt.Sprintf("%s%d", glyphs.down, down))
-	if unknown > 0 {
-		health += muted.Render("  ") + unknownStyle.Render(fmt.Sprintf("%s%d", glyphs.unknown, unknown))
-	}
+		errStyle.Render(fmt.Sprintf("%s%d", glyphs.down, down)) + muted.Render("  ") +
+		unknownStyle.Render(fmt.Sprintf("%s%d", glyphs.unknown, unknown))
 	checked := "not checked"
 	if !m.lastCheck.IsZero() {
-		checked = "checked " + state.RelAge(time.Since(m.lastCheck))
+		checked = "checked " + displayAge(state.RelAge(time.Since(m.lastCheck)))
 	}
-	context := title.Render(fmt.Sprintf("%d providers", len(m.cfg.Providers))) +
-		muted.Render(fmt.Sprintf("  ·  %d meters  ·  %d favourites  ·  %s", meterCount, favouriteCount, checked))
-	clock := title.Render(time.Now().Format("15:04:05"))
+	metrics := health + muted.Render(" ·  ") +
+		title.Render(fmt.Sprintf("%d providers", len(m.cfg.Providers)))
+	if meterCount > 0 {
+		metrics += muted.Render(fmt.Sprintf("  ·  %d meters", meterCount))
+	}
+	if favouriteCount > 0 {
+		metrics += muted.Render(fmt.Sprintf("  ·  %d favourites", favouriteCount))
+	}
+	metrics += muted.Render(fmt.Sprintf("  ·  %s", checked))
 
 	artLines := strings.Split(theme.Art(m.palette), "\n")
 	for len(artLines) < headerLines {
@@ -1402,47 +1436,28 @@ func (m model) headerRows() ([]string, []hitRegion) {
 		gap := max(0, available-ansi.StringWidth(left)-ansi.StringWidth(right))
 		return fitCells(art+left+strings.Repeat(" ", gap)+right, m.width)
 	}
-	renderButtons := func(buttons []headerButton) (string, []int) {
-		var text string
-		var offsets []int
-		for index, button := range buttons {
-			if index > 0 {
-				text += "  "
-			}
-			offsets = append(offsets, ansi.StringWidth(text))
-			text += button.text
-		}
-		return text, offsets
-	}
 
-	var rows []string
-	var regions []hitRegion
-	if m.width < 110 {
-		menu := m.headerNav()[:1]
-		menuText, menuOffsets := renderButtons(menu)
-		viewButton := headerButton{action.Render("p") + title.Render(" views"), "cycle-view"}
-		viewText, viewOffsets := renderButtons([]headerButton{viewButton})
-		bottomLeft := viewText + muted.Render("  ·  "+checked)
-		rows = []string{
-			place(artLines[0], health, menuText),
-			place(artLines[1], bottomLeft, clock),
-		}
-		menuX := m.width - ansi.StringWidth(menuText)
-		regions = append(regions, hitRegion{kind: menu[0].kind, x: menuX + menuOffsets[0], y: 0, w: ansi.StringWidth(menu[0].text), h: 1})
-		regions = append(regions, hitRegion{kind: viewButton.kind, x: artWidth + viewOffsets[0], y: 1, w: ansi.StringWidth(viewButton.text), h: 1})
-	} else {
-		buttons := m.headerNav()
-		actions, offsets := renderButtons(buttons)
-		rows = []string{
-			place(artLines[0], health, actions),
-			place(artLines[1], context, clock),
-		}
-		actionX := m.width - ansi.StringWidth(actions)
-		for index, button := range buttons {
-			regions = append(regions, hitRegion{kind: button.kind, x: actionX + offsets[index], y: 0, w: ansi.StringWidth(button.text), h: 1})
-		}
+	product := title.Render(" · status slug")
+	dateTime := title.Render(m.headerDateTime())
+	rows := []string{
+		place(artLines[0], product, dateTime),
+		place(artLines[1], "", metrics),
 	}
-	return rows, regions
+	return rows, nil
+}
+
+func (m model) headerDateTime() string {
+	now := time.Now()
+	switch m.cfg.Settings.ClockLayout {
+	case "time":
+		return now.Format("15:04:05")
+	case "date":
+		return now.Format("2006-01-02")
+	case "time_date":
+		return now.Format("15:04:05") + " " + now.Format("2006-01-02")
+	default:
+		return now.Format("2006-01-02") + " " + now.Format("15:04:05")
+	}
 }
 
 func (m model) renderHeader() string {
@@ -1455,7 +1470,7 @@ type dashKeyMap struct{}
 
 func (dashKeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{
-		key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		key.NewBinding(key.WithKeys("shift+q"), key.WithHelp("shift+q", "uit")),
 		key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "check")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "check one")),
 		key.NewBinding(key.WithKeys("s/u/f/t"), key.WithHelp("s/u/f/t", "menus")),
@@ -1478,25 +1493,25 @@ func (dashKeyMap) ShortHelp() []key.Binding {
 func (k dashKeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
 
 func (m model) renderFooter() string {
-	if m.footer != "" {
-		return " " + truncate(
-			lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn])).Render(m.footer),
-			m.width-1)
-	}
 	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Accent])).Bold(true)
 	plain := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Muted]))
-	menu := accent.Render("m") + plain.Render("enu")
-	preset := accent.Render("p") + plain.Render("reset")
-	previousPreset := accent.Render("shift+p") + plain.Render("rev preset")
+	warn := lipgloss.NewStyle().Foreground(lipgloss.Color(m.palette[theme.Warn])).Bold(true)
 	primary := []string{
+		accent.Render("m") + plain.Render("enu"),
+		accent.Render("p") + plain.Render("reset"),
 		accent.Render("tab") + plain.Render(" focus"),
-		menu,
-		preset,
-		previousPreset,
+		accent.Render("g") + plain.Render("ateway"),
+		accent.Render("c") + plain.Render("heck"),
+		accent.Render("shift+q") + plain.Render("uit"),
 		accent.Render("?") + plain.Render(" help"),
-		accent.Render("q") + plain.Render(" quit"),
 	}
-	return " " + fitActionLine(primary, m.width-1, plain.Render(" · "))
+	actions := fitActionLine(primary, min(m.width-1, 96), plain.Render(" · "))
+	left := ""
+	if m.footer != "" {
+		left = " " + truncate(warn.Render(m.footer), max(0, m.width-ansi.StringWidth(actions)-2))
+	}
+	right := strings.Repeat(" ", max(0, m.width-ansi.StringWidth(left)-ansi.StringWidth(actions))) + actions
+	return fitCells(left+right, m.width)
 }
 
 func fitActionLine(parts []string, width int, sep string) string {

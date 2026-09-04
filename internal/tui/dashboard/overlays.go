@@ -948,6 +948,9 @@ func (m model) newSettingsOverlay() overlayState {
 	statsModeF := widgets.NewSelect(m.palette, "stats display", []string{"auto", "table", "graph"})
 	selectIdx(statsModeF, []string{"auto", "table", "graph"}, s.StatsMode)
 
+	clockF := widgets.NewSelect(m.palette, "clock layout", []string{"date_time", "time_date", "time", "date"})
+	selectIdx(clockF, []string{"date_time", "time_date", "time", "date"}, s.ClockLayout)
+
 	bgF := widgets.NewConfirm(m.palette, "paint theme background", s.ThemeBackground)
 
 	timeoutF := widgets.NewText(m.palette, "probe timeout (5-30s)", "10")
@@ -994,7 +997,7 @@ func (m model) newSettingsOverlay() overlayState {
 
 	fields := []widgets.Field{
 		widgets.NewNote(m.palette, "appearance", "theme, continuous pane splits, chrome"),
-		themeF, viewF, topRatioF, leftRatioF, usageRatioF, borderF, glyphF, statsModeF, bgF,
+		themeF, viewF, topRatioF, leftRatioF, usageRatioF, borderF, glyphF, statsModeF, clockF, bgF,
 		widgets.NewNote(m.palette, "probing", "timeouts, refresh, key storage"),
 		timeoutF, refreshF, modeF, histF, keysF,
 		widgets.NewNote(m.palette, "integrations", "press g for Moshi setup/status; loopback API setting below"),
@@ -1010,7 +1013,7 @@ func (m model) newSettingsOverlay() overlayState {
 		fields: map[string]widgets.Field{
 			"theme": themeF, "view": viewF, "topRatio": topRatioF,
 			"leftRatio": leftRatioF, "usageRatio": usageRatioF,
-			"border": borderF, "glyphs": glyphF, "statsMode": statsModeF, "themeBackground": bgF,
+			"border": borderF, "glyphs": glyphF, "statsMode": statsModeF, "clock": clockF, "themeBackground": bgF,
 			"timeout": timeoutF, "refresh": refreshF, "mode": modeF, "history": histF,
 			"keys": keysF, "serveListen": serveF, "nerd": nerdF, "confirmQuit": quitF,
 			"checkOnLaunch": launchF, "alertBell": bellF,
@@ -1093,6 +1096,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		s.BorderStyle = get("border")
 		s.GraphStyle = get("glyphs")
 		s.StatsMode = get("statsMode")
+		s.ClockLayout = get("clock")
 		s.ProbeTimeout, _ = strconv.Atoi(get("timeout"))
 		s.AutoRefresh, _ = strconv.Atoi(map[string]string{"off": "0", "30s": "30", "60s": "60", "300s": "300"}[get("refresh")])
 		s.ProbeMode = get("mode")

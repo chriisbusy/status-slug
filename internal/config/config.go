@@ -35,6 +35,8 @@ type Settings struct {
 	BorderStyle   string `toml:"border_style"`
 	GraphStyle    string `toml:"graph_style"`
 	StatsMode     string `toml:"stats_mode"`
+	// ClockLayout controls header date/time presentation: date_time | time_date | time | date.
+	ClockLayout string `toml:"clock_layout"`
 	// ThemeBackground paints the theme's bg color over the whole terminal.
 	ThemeBackground bool   `toml:"theme_background"`
 	ServeListen     string `toml:"serve_listen,omitempty"` // saved by serve --listen
@@ -98,6 +100,7 @@ func Default() Config {
 			GraphStyle:      "tty",
 			ThemeBackground: true,
 			StatsMode:       "auto",
+			ClockLayout:     "date_time",
 		},
 	}
 }

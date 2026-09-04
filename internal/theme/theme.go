@@ -67,9 +67,10 @@ type Warning struct {
 
 // Builtins.
 // sstop is the default btop-like terminal theme. ANSI slots deliberately let
-// the terminal own the exact colors, matching btop's force-TTY behavior.
+// the terminal own semantic graph colors; the explicit near-black background
+// keeps painted chrome darker than compact terminal blacks.
 var builtinSstop = Palette{
-	Bg:             "0",
+	Bg:             "#15161D",
 	Fg:             "15",
 	Muted:          "15",
 	Title:          "15",

@@ -449,7 +449,7 @@ func TestHeaderKeepsExactSSLUGWordmark(t *testing.T) {
 func TestFooterUsesGlobalActionsOnly(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderFooter())
-	for _, want := range []string{"tab focus", "menu", "preset", "shift+prev preset", "? help", "q quit"} {
+	for _, want := range []string{"menu", "preset", "tab focus", "gateway", "check", "shift+quit", "? help"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer missing global action %q: %q", want, got)
 		}
@@ -459,23 +459,60 @@ func TestFooterUsesGlobalActionsOnly(t *testing.T) {
 	}
 }
 
-func TestHeaderClickRegionsOpenMenu(t *testing.T) {
+func TestThemeBackgroundPaintsEntireDashboardCanvas(t *testing.T) {
 	m := newTestModel()
-	_, regions := m.headerRows()
-	var menu hitRegion
-	for _, r := range regions {
-		if r.kind == "menu" {
-			menu = r
-			break
+	m.width, m.height = 140, 45
+	m.palette[theme.Bg] = "#01020A"
+	frame := m.render()
+	if !strings.Contains(frame, "\x1b[48") {
+		t.Fatalf("dashboard did not contain background painting:\n%s", frame[:500])
+	}
+	m.cfg.Settings.ThemeBackground = false
+	frame = m.render()
+	if strings.Contains(frame, "\x1b[48") {
+		t.Fatalf("dashboard painted background when disabled")
+	}
+}
+
+func TestHeaderClockLayoutAndTick(t *testing.T) {
+	m := newTestModel()
+	for layout, want := range map[string]struct{ date, time bool }{
+		"date_time": {true, true},
+		"time_date": {true, true},
+		"time":      {false, true},
+		"date":      {true, false},
+	} {
+		m.cfg.Settings.ClockLayout = layout
+		got := m.headerDateTime()
+		if want.date && !strings.Contains(got, "-") {
+			t.Fatalf("layout %q missing date: %q", layout, got)
+		}
+		if want.time && !strings.Contains(got, ":") {
+			t.Fatalf("layout %q missing time: %q", layout, got)
+		}
+		if !want.date && strings.Contains(got, "-") {
+			t.Fatalf("layout %q leaked date: %q", layout, got)
+		}
+		if !want.time && strings.Contains(got, ":") {
+			t.Fatalf("layout %q leaked time: %q", layout, got)
 		}
 	}
-	if menu.w == 0 {
-		t.Fatalf("menu header region missing: %+v", regions)
+	_, cmd := m.Update(clockTickMsg(time.Now()))
+	if cmd == nil {
+		t.Fatal("clock tick did not reschedule")
 	}
-	next, _ := m.handleClick(tea.Mouse{X: menu.x, Y: menu.y, Button: tea.MouseLeft})
+}
+
+func TestHeaderHasNoDuplicateActionRegions(t *testing.T) {
+	m := newTestModel()
+	_, regions := m.headerRows()
+	if len(regions) != 0 {
+		t.Fatalf("header retained duplicate mouse actions: %+v", regions)
+	}
+	next, _ := m.handleKey(keyPress("m"))
 	got := next.(model)
 	if got.ov.kind != overlayMenu {
-		t.Fatalf("menu header click did not open menu: %+v", got.ov)
+		t.Fatalf("menu key still dispatchable through dashboard: %+v", got.ov)
 	}
 }
 
@@ -1333,12 +1370,12 @@ func TestStatsMeterDetailsReserveScopedErrorLine(t *testing.T) {
 func TestFooterUsesRequestedPresetLabels(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderFooter())
-	for _, want := range []string{"menu", "preset", "shift+prev preset"} {
+	for _, want := range []string{"menu", "preset", "tab focus", "gateway", "check", "shift+quit", "? help"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer missing %q: %q", want, got)
 		}
 	}
-	for _, unwanted := range []string{"m menu", "p views", "shift+p previous"} {
+	for _, unwanted := range []string{"m menu", "p views", "shift+prev preset", "shift+p previous", "q quit"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("footer retained %q: %q", unwanted, got)
 		}

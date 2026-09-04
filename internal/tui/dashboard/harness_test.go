@@ -61,7 +61,7 @@ func harnessModel(t *testing.T) model {
 }
 
 func TestHarness_QuitCleanly(t *testing.T) {
-	m := runProgram(t, harnessModel(t), "q")
+	m := runProgram(t, harnessModel(t), "Q")
 	if m.ov.kind != overlayNone {
 		t.Error("overlay stuck open after quit")
 	}
@@ -69,14 +69,14 @@ func TestHarness_QuitCleanly(t *testing.T) {
 
 func TestHarness_TabCyclesFocus(t *testing.T) {
 	// tab then q. Focus moves from status (0) to next visible panel.
-	m := runProgram(t, harnessModel(t), "\tq")
+	m := runProgram(t, harnessModel(t), "\tQ")
 	if m.focused == panelStatus {
 		t.Error("tab did not move focus")
 	}
 }
 
 func TestHarness_ZTogglesZoom(t *testing.T) {
-	m := runProgram(t, harnessModel(t), "zq")
+	m := runProgram(t, harnessModel(t), "zQ")
 	if !m.zoomed {
 		t.Error("z did not toggle zoom")
 	}
@@ -86,7 +86,7 @@ func TestHarness_ViewCyclePersisted(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SSLUG_STATE_HOME", tmp)
 	m := harnessModel(t)
-	m = runProgram(t, m, "pq")
+	m = runProgram(t, m, "pQ")
 	if m.st.UI.View != "compact" {
 		t.Errorf("p should cycle full→compact, got %q", m.st.UI.View)
 	}
@@ -103,7 +103,7 @@ func TestHarness_ViewCyclePersisted(t *testing.T) {
 func TestHarness_MenusOpen(t *testing.T) {
 	// Key opens the menu overlay; q closes the overlay; q quits.
 	for _, k := range []string{"s", "u", "f", "t"} {
-		m := runProgram(t, harnessModel(t), k+"qq")
+		m := runProgram(t, harnessModel(t), k+"qQ")
 		if m.ov.kind != overlayNone {
 			t.Errorf("menu %q: overlay stuck", k)
 		}
@@ -111,7 +111,7 @@ func TestHarness_MenusOpen(t *testing.T) {
 }
 
 func TestHarness_HelpOverlay(t *testing.T) {
-	m := runProgram(t, harnessModel(t), "?qq")
+	m := runProgram(t, harnessModel(t), "?qQ")
 	if m.ov.kind != overlayNone {
 		t.Error("help overlay stuck")
 	}
