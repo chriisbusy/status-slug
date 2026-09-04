@@ -503,6 +503,21 @@ func TestHeaderClockLayoutAndTick(t *testing.T) {
 	}
 }
 
+func TestStatusProductTitleAppearsOnlyOnFilledPaneBorder(t *testing.T) {
+	m := newTestModel()
+	header := ansi.Strip(m.renderHeader())
+	if strings.Contains(header, "status slug") {
+		t.Fatalf("header retains duplicate product title:\n%s", header)
+	}
+	border := ansi.Strip(buildTitleBorder(80, "status", "status slug", "#6572A0", lipgloss.RoundedBorder()))
+	if !strings.Contains(border, "status slug") {
+		t.Fatalf("pane title missing product label: %q", border)
+	}
+	if prefix := border[:strings.Index(border, "status slug")]; !strings.HasSuffix(prefix, "─") {
+		t.Fatalf("pane title border has unfilled gap: %q", border)
+	}
+}
+
 func TestHeaderHasNoDuplicateActionRegions(t *testing.T) {
 	m := newTestModel()
 	_, regions := m.headerRows()

@@ -70,7 +70,7 @@ type Warning struct {
 // the terminal own semantic graph colors; the explicit near-black background
 // keeps painted chrome darker than compact terminal blacks.
 var builtinSstop = Palette{
-	Bg:             "#15161D",
+	Bg:             "#21222B",
 	Fg:             "15",
 	Muted:          "15",
 	Title:          "15",
