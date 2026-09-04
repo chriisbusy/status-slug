@@ -69,38 +69,13 @@ func GradientText(text, lo, hi string) string {
 	return strings.Join(lines, "\n")
 }
 
-// ArtLines are the sslug mark — SSLUG in a two-row block font,
-// drawn with a gradient sweep.
+// ArtLines are the sslug mark — SSLUG in a two-row block font.
 var ArtLines = []string{
 	"█▀▀ █▀▀ █   █ █ ▄▀▀",
 	"▄▄█ ▄▄█ █▄▄ █▄█ █▄█",
 }
 
-// ActionGradientText paints each line with a TTY-style faint→normal→bold
-// intensity sweep while retaining one theme color.
-func ActionGradientText(text, colour string) string {
-	lines := strings.Split(text, "\n")
-	for lineIndex, line := range lines {
-		runes := []rune(line)
-		var out strings.Builder
-		for index, char := range runes {
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color(colour))
-			switch {
-			case (index >= 4 && index <= 6) || (lineIndex == 1 && index <= 2):
-				style = style.Bold(true)
-			case index*3 < len(runes):
-				style = style.Faint(true)
-			case index*3 >= len(runes)*2:
-				style = style.Bold(true)
-			}
-			out.WriteString(style.Render(string(char)))
-		}
-		lines[lineIndex] = out.String()
-	}
-	return strings.Join(lines, "\n")
-}
-
-// Art renders the exact SSLUG mark in the theme's action color.
+// Art renders the exact SSLUG mark once, in the theme's action color.
 func Art(p Palette) string {
-	return ActionGradientText(strings.Join(ArtLines, "\n"), p[Accent])
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(p[Accent])).Render(strings.Join(ArtLines, "\n"))
 }
