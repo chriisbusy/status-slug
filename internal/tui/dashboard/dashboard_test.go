@@ -227,7 +227,7 @@ func TestRenderStatsPaneWithoutChecksShowsUnknownRows(t *testing.T) {
 	m := newTestModel()
 	m.st = state.New()
 	got := ansi.Strip(m.renderStatsPane(60, 10, false))
-	for _, want := range []string{"OKProv", "status unknown", "success", "p95 latency"} {
+	for _, want := range []string{"OKProv", "status unknown", "success"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stats pane missing configured unknown row %q: %q", want, got)
 		}
@@ -339,7 +339,7 @@ func TestStatsColumnsKeepProcessGrammarAtNarrowWidth(t *testing.T) {
 func TestStatsPaneCompactRenderShowsProcessColumns(t *testing.T) {
 	m := newTestModel()
 	got := ansi.Strip(m.renderStatsPane(38, 10, false))
-	for _, want := range []string{"OKProv", "status", "success", "p95 latency"} {
+	for _, want := range []string{"OKProv", "status", "success"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("compact stats pane missing %q in:\n%s", want, got)
 		}
@@ -1258,14 +1258,64 @@ func TestStatsTableDiffersFromFavourites(t *testing.T) {
 	}
 }
 
+func TestSelectedGraphMetricsExposeRealCostAndWeeklyCap(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Providers = []config.Provider{{Name: "sub", Enabled: true, Meters: []config.Meter{
+		{Name: "7 day budget", Kind: "auto", Auto: "omp:sub:7d", Cap: 100, Unit: "percent"},
+		{Name: "total spend", Kind: "manual", Cap: 40, Unit: "USD"},
+	}}}
+	m.st.SetMeter("sub", "7 day budget", 73)
+	m.st.SetMeter("sub", "total spend", 21.25)
+	metrics := m.selectedGraphMetrics(statsRow{name: "sub", checks: 10, okPct: 90})
+	labels := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		labels = append(labels, metric.label+":"+metric.value)
+	}
+	joined := strings.Join(labels, ",")
+	for _, want := range []string{"success:90%", "7 day budget:73%", "total spend:$21.25"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "latency") {
+		t.Fatalf("latency metric survived replacement: %s", joined)
+	}
+}
+
+func TestSelectedGraphMetricsDoNotFabricateCostOrCap(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Providers = []config.Provider{{Name: "sub", Enabled: true, Meters: []config.Meter{
+		{Name: "7 day budget", Kind: "auto", Auto: "omp:sub:7d", Cap: 100, Unit: "percent"},
+		{Name: "total spend", Kind: "manual", Cap: 40, Unit: "USD"},
+	}}}
+	metrics := m.selectedGraphMetrics(statsRow{name: "sub", checks: 10, okPct: 90})
+	joined := ""
+	for _, metric := range metrics {
+		if metric.label != "success" {
+			joined += metric.label + ":" + metric.value + ","
+		}
+	}
+	for _, want := range []string{"7 day budget:not measured", "total spend:not measured"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing honest empty metric %q in %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "$0.00") || strings.Contains(joined, "0%") {
+		t.Fatalf("empty metrics fabricated values: %s", joined)
+	}
+}
+
 func TestStatsTableBottomUsesBtopMeterDetails(t *testing.T) {
 	m := newTestModel()
 	m.cfg.Settings.StatsMode = "table"
 	got := ansi.Strip(m.renderStatsPane(100, 30, false))
-	for _, want := range []string{"selected", "success", "p95 latency", "█"} {
+	for _, want := range []string{"selected", "success", "█"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("stats table bottom missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "p95 latency") || strings.Contains(got, "p50 latency") {
+		t.Fatalf("stats table bottom retained latency bars:\n%s", got)
 	}
 }
 
@@ -1316,6 +1366,34 @@ func TestMenuCategoryShortcutsRouteWithinOnePopup(t *testing.T) {
 		got := next.(model)
 		if got.ov.kind != tc.kind || got.ov.title != tc.title {
 			t.Fatalf("key %q routed to kind=%v title=%q, want kind=%v title=%q", tc.key, got.ov.kind, got.ov.title, tc.kind, tc.title)
+		}
+	}
+}
+
+func TestFocusedPanelUsesAccentBorder(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 140, 45
+	m.focused = panelStatus
+	if got, want := m.paneBorderColor(panelStatus), m.palette[theme.BoxBorderFocus]; got != want {
+		t.Fatalf("focused border = %q, want %q", got, want)
+	}
+	if got, want := m.paneBorderColor(panelUsage), m.palette[theme.PaneUsage]; got != want {
+		t.Fatalf("unfocused usage border = %q, want %q", got, want)
+	}
+}
+
+func TestKeyboardFocusVisitsEveryPanel(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 140, 45
+	seen := map[panelID]bool{panelStatus: true}
+	for range 8 {
+		next, _ := m.handleKey(keyPress("tab"))
+		m = next.(model)
+		seen[m.focused] = true
+	}
+	for _, panel := range []panelID{panelStatus, panelUsage, panelFavourites, panelStats} {
+		if !seen[panel] {
+			t.Fatalf("keyboard focus never reached %s; visited=%v", panelNames[panel], seen)
 		}
 	}
 }

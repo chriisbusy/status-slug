@@ -1579,7 +1579,7 @@ func (m model) renderPane(p panelID, w, h int) string {
 	if len(contentLines) > innerH {
 		contentLines = contentLines[:innerH]
 	}
-	borderColor := m.panelChrome(p)
+	borderColor := m.paneBorderColor(p)
 	bs := lipgloss.RoundedBorder()
 	switch m.cfg.Settings.BorderStyle {
 	case "square":
@@ -1601,6 +1601,14 @@ func (m model) renderPane(p panelID, w, h int) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) paneBorderColor(p panelID) string {
+	borderColor := m.panelChrome(p)
+	if p == m.focused && len(m.admittedPanels()) > 1 {
+		borderColor = m.palette[theme.BoxBorderFocus]
+	}
+	return borderColor
 }
 
 func (m model) paneBottomHint(panel panelID) string {

@@ -935,31 +935,17 @@ func (m model) renderStatsGraphPane(width, height int) string {
 		identity,
 		muted.Render(fitCells(fmt.Sprintf("status %s · age %s · checks %d", row.status, age, row.checks), contentWidth)),
 	}
-	type metric struct {
-		label, value string
-		percent      float64
-		role         theme.Role
-	}
-	accountPercent, downPercent := 0.0, 0.0
-	if row.checks > 0 {
-		accountPercent = float64(row.account) / float64(row.checks)
-		downPercent = float64(row.down) / float64(row.checks)
-	}
-	metrics := []metric{
-		{"success", fmt.Sprintf("%d%%", row.okPct), float64(row.okPct) / 100, theme.OK},
-		{"p95 latency", fmt.Sprintf("%.0fms", row.p95), row.p95 / 600, theme.Warn},
-		{"p50 latency", fmt.Sprintf("%.0fms", row.p50), row.p50 / 600, theme.BoxBorder},
-		{"account", fmt.Sprintf("%d", row.account), accountPercent, theme.Warn},
-		{"down", fmt.Sprintf("%d", row.down), downPercent, theme.Err},
-	}
+	metrics := m.selectedGraphMetrics(row)
 	blocks := max(1, (height-len(lines))/2)
 	for _, metric := range metrics[:min(blocks, len(metrics))] {
 		label := title.Render(metric.label)
 		value := title.Render(metric.value)
-		lines = append(lines,
-			fitCells(label+strings.Repeat(" ", max(1, contentWidth-ansi.StringWidth(label)-ansi.StringWidth(value)))+value, contentWidth),
-			m.btopMeterBar(clampUnit(metric.percent), contentWidth, metric.role),
-		)
+		headerLine := fitCells(label+strings.Repeat(" ", max(1, contentWidth-ansi.StringWidth(label)-ansi.StringWidth(value)))+value, contentWidth)
+		if metric.measured {
+			lines = append(lines, headerLine, m.btopMeterBar(clampUnit(metric.percent), contentWidth, metric.role))
+		} else {
+			lines = append(lines, headerLine)
+		}
 	}
 	for len(lines) < height {
 		lines = append(lines, strings.Repeat(" ", contentWidth))
@@ -1076,23 +1062,7 @@ func (m model) statsSelectedMeterDetails(row statsRow, width, maxLines int) []st
 		title.Render(fitCells("selected  "+row.name+" · "+row.provider, width)),
 		muted.Render(fitCells(fmt.Sprintf("status %s · age %s · checks %d · errors %d", row.status, age, row.checks, len(errors)), width)),
 	}
-	type metric struct {
-		label, value string
-		percent      float64
-		role         theme.Role
-	}
-	accountPercent, downPercent := 0.0, 0.0
-	if row.checks > 0 {
-		accountPercent = float64(row.account) / float64(row.checks)
-		downPercent = float64(row.down) / float64(row.checks)
-	}
-	metrics := []metric{
-		{"success", fmt.Sprintf("%d%%", row.okPct), float64(row.okPct) / 100, theme.OK},
-		{"p95 latency", fmt.Sprintf("%.0fms", row.p95), row.p95 / 600, theme.Warn},
-		{"p50 latency", fmt.Sprintf("%.0fms", row.p50), row.p50 / 600, theme.BoxBorder},
-		{"account", fmt.Sprintf("%d", row.account), accountPercent, theme.Warn},
-		{"down", fmt.Sprintf("%d", row.down), downPercent, theme.Err},
-	}
+	metrics := m.selectedGraphMetrics(row)
 	metricLimit := maxLines
 	if len(errors) > 0 {
 		metricLimit--
@@ -1102,10 +1072,12 @@ func (m model) statsSelectedMeterDetails(row statsRow, width, maxLines int) []st
 			break
 		}
 		label, value := title.Render(metric.label), title.Render(metric.value)
-		lines = append(lines,
-			fitCells(label+strings.Repeat(" ", max(1, width-ansi.StringWidth(label)-ansi.StringWidth(value)))+value, width),
-			m.btopMeterBar(clampUnit(metric.percent), width, metric.role),
-		)
+		headerLine := fitCells(label+strings.Repeat(" ", max(1, width-ansi.StringWidth(label)-ansi.StringWidth(value)))+value, width)
+		if metric.measured {
+			lines = append(lines, headerLine, m.btopMeterBar(clampUnit(metric.percent), width, metric.role))
+		} else {
+			lines = append(lines, headerLine)
+		}
 	}
 	if len(errors) > 0 && len(lines) < maxLines {
 		recent := errors[len(errors)-1]
@@ -1113,6 +1085,63 @@ func (m model) statsSelectedMeterDetails(row statsRow, width, maxLines int) []st
 			fitCells(row.name+" · "+recent.Status+" · "+recent.Reason, width)))
 	}
 	return lines
+}
+
+type statsMetric struct {
+	label, value string
+	percent      float64
+	role         theme.Role
+	measured     bool
+}
+
+func (m model) selectedGraphMetrics(row statsRow) []statsMetric {
+	metrics := []statsMetric{{
+		label: "success", value: fmt.Sprintf("%d%%", row.okPct), percent: float64(row.okPct) / 100, role: theme.OK, measured: true,
+	}}
+	providerConfig := m.cfg.Find(row.name)
+	if providerConfig == nil {
+		providerConfig = m.cfg.Find(row.provider)
+	}
+	if providerConfig == nil {
+		return metrics
+	}
+	for _, meter := range providerConfig.Meters {
+		name := strings.ToLower(meter.Name)
+		unit := strings.ToLower(meter.Unit)
+		meterValue := m.st.GetMeter(providerConfig.Name, meter.Name)
+		switch {
+		case strings.Contains(name, "7 day") || strings.Contains(name, "week"):
+			if meterValue == nil {
+				metrics = append(metrics, statsMetric{label: meter.Name, value: "not measured", role: theme.BoxBorder})
+				continue
+			}
+			metrics = append(metrics, statsMetric{
+				label: meter.Name, value: fmt.Sprintf("%.0f%%", meterValue.Value), percent: meterValue.Value / max(1.0, meter.Cap), role: theme.Warn, measured: true,
+			})
+		case strings.Contains(name, "cost") || strings.Contains(unit, "$") || strings.Contains(unit, "usd"):
+			if meterValue == nil {
+				metrics = append(metrics, statsMetric{label: meter.Name, value: "not measured", role: theme.BoxBorder})
+				continue
+			}
+			role := theme.OK
+			percent := 0.0
+			if meter.Cap > 0 {
+				percent = meterValue.Value / meter.Cap
+				if percent >= 0.85 {
+					role = theme.Err
+				} else if percent >= 0.60 {
+					role = theme.Warn
+				}
+			}
+			metrics = append(metrics, statsMetric{label: meter.Name, value: fmt.Sprintf("$%.2f", meterValue.Value), percent: percent, role: role, measured: true})
+		}
+	}
+	if row.checks > 0 && row.account > 0 {
+		metrics = append(metrics, statsMetric{
+			label: "account", value: fmt.Sprintf("%d", row.account), percent: float64(row.account) / float64(row.checks), role: theme.Warn, measured: true,
+		})
+	}
+	return metrics
 }
 
 func (m model) statsErrorsForRow(row statsRow) []state.ErrorEntry {
